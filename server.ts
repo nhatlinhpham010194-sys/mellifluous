@@ -5,6 +5,7 @@ import { createServer as createViteServer } from 'vite';
 import {
   initDataStore,
   getAllStories,
+  getStoryById,
   saveStory,
   deleteStory,
   getChaptersByStory,
@@ -158,6 +159,17 @@ app.get('/api/events', (req: Request, res: Response) => {
 app.get('/api/stories', (req: Request, res: Response) => {
   const stories = getAllStories();
   res.json(stories);
+});
+
+app.get('/api/stories/:id', (req: Request, res: Response) => {
+  const { id } = req.params;
+  const story = getStoryById(id);
+  if (!story) {
+    res.status(404).json({ error: 'Story not found' });
+    return;
+  }
+  const chapters = getChaptersByStory(story.id);
+  res.json({ story, chapters });
 });
 
 app.post('/api/stories', (req: Request, res: Response) => {

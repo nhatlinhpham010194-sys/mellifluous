@@ -80,9 +80,49 @@ export const initDataStore = () => {
   console.log(`[DataStore] Initialized with ${cachedStories.length} stories, ${Object.keys(cachedChapters).length} chapter sets, ${cachedAnnouncements.length} announcements.`);
 };
 
+// Vietnamese Slug Helper for Robust URL Lookup
+export const toSlug = (str: string = ''): string => {
+  return str
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[đĐ]/g, 'd')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+};
+
 // Stories Operations
 export const getAllStories = (): Story[] => {
   return [...cachedStories];
+};
+
+export const getStoryById = (id: string): Story | undefined => {
+  if (!id) return undefined;
+  const decodedId = decodeURIComponent(id).trim();
+  const slugId = toSlug(decodedId);
+
+  // 1. Exact ID match
+  const exact = cachedStories.find((s) => s.id === decodedId || s.id === id);
+  if (exact) return exact;
+
+  // 2. Alias match for special stories
+  if (decodedId === 'anh-dao-5cm' || slugId === 'anh-dao-5cm') {
+    const alias = cachedStories.find((s) => s.id === 'anh-dao-nam-centimet' || s.id === 'anh-dao-5cm');
+    if (alias) return alias;
+  }
+  if (decodedId === 'anh-dao-nam-centimet' || slugId === 'anh-dao-nam-centimet') {
+    const alias = cachedStories.find((s) => s.id === 'anh-dao-5cm' || s.id === 'anh-dao-nam-centimet');
+    if (alias) return alias;
+  }
+
+  // 3. Match by slugified ID, title, or original title
+  return cachedStories.find((s) => {
+    return (
+      toSlug(s.id) === slugId ||
+      toSlug(s.title) === slugId ||
+      toSlug(s.originalTitle) === slugId
+    );
+  });
 };
 
 export const saveStory = (story: Story): Story => {
@@ -106,7 +146,22 @@ export const deleteStory = (storyId: string): boolean => {
 
 // Chapters Operations
 export const getChaptersByStory = (storyId: string): Chapter[] => {
-  return cachedChapters[storyId] || [];
+  if (!storyId) return [];
+  const decodedId = decodeURIComponent(storyId).trim();
+  const directList = cachedChapters[decodedId] || cachedChapters[storyId];
+  if (directList && directList.length > 0) return directList;
+
+  // Alias lookup
+  if (decodedId === 'anh-dao-5cm') return cachedChapters['anh-dao-nam-centimet'] || [];
+  if (decodedId === 'anh-dao-nam-centimet') return cachedChapters['anh-dao-5cm'] || [];
+
+  // If queried by slug, find the resolved story first
+  const resolved = getStoryById(decodedId);
+  if (resolved && resolved.id !== decodedId) {
+    return cachedChapters[resolved.id] || [];
+  }
+
+  return [];
 };
 
 export const getAllChaptersMap = (): Record<string, Chapter[]> => {

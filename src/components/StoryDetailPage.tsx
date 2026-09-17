@@ -2,14 +2,55 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { Story, Chapter } from '../types';
 import { getStoryChapters } from '../data/mockData';
-import { subscribeToStoryChapters, recordStoryView } from '../lib/realtimeService';
+import { subscribeToStoryChapters, recordStoryView, getStoredStories } from '../lib/realtimeService';
 import { StoryDetailView } from './StoryDetailView';
 import { ReaderView } from './ReaderView';
-import { ArrowLeft, BookOpen, AlertCircle, Home } from 'lucide-react';
+import { ArrowLeft, BookOpen, AlertCircle, Home, RefreshCw } from 'lucide-react';
 
 interface StoryDetailPageProps {
   stories: Story[];
 }
+
+const toSlug = (str: string = ''): string => {
+  return str
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[đĐ]/g, 'd')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+};
+
+const findStoryMatch = (list: Story[], queryId?: string): Story | null => {
+  if (!queryId || !list || list.length === 0) return null;
+  const decoded = decodeURIComponent(queryId).trim();
+  const slugTarget = toSlug(decoded);
+
+  // 1. Direct ID match
+  const exact = list.find((s) => s.id === decoded || s.id === queryId);
+  if (exact) return exact;
+
+  // 2. Special aliases
+  if (decoded === 'anh-dao-5cm' || slugTarget === 'anh-dao-5cm') {
+    const alias = list.find((s) => s.id === 'anh-dao-nam-centimet' || s.id === 'anh-dao-5cm');
+    if (alias) return alias;
+  }
+  if (decoded === 'anh-dao-nam-centimet' || slugTarget === 'anh-dao-nam-centimet') {
+    const alias = list.find((s) => s.id === 'anh-dao-5cm' || s.id === 'anh-dao-nam-centimet');
+    if (alias) return alias;
+  }
+
+  // 3. Match slug of story ID, Vietnamese title, or original title
+  return (
+    list.find((s) => {
+      return (
+        toSlug(s.id) === slugTarget ||
+        toSlug(s.title) === slugTarget ||
+        toSlug(s.originalTitle) === slugTarget
+      );
+    }) || null
+  );
+};
 
 export const StoryDetailPage: React.FC<StoryDetailPageProps> = ({ stories }) => {
   const { id, chapterNumber } = useParams<{ id: string; chapterNumber?: string }>();
@@ -20,47 +61,158 @@ export const StoryDetailPage: React.FC<StoryDetailPageProps> = ({ stories }) => 
     window.scrollTo({ top: 0, behavior: 'instant' });
   }, [id, chapterNumber]);
 
-  // Find matching story by ID or known aliases
-  const story = stories.find(
-    (s) =>
-      s.id === id ||
-      (id === 'anh-dao-5cm' && s.id === 'anh-dao-nam-centimet') ||
-      (id === 'anh-dao-nam-centimet' && s.id === 'anh-dao-5cm')
-  );
+  // Local state for resolved story (handles asynchronous link opening & direct server loads)
+  const [resolvedStory, setResolvedStory] = useState<Story | null>(() => {
+    if (!id) return null;
+    const found = findStoryMatch(stories, id);
+    if (found) return found;
+
+    // Check stored stories in localStorage
+    const local = getStoredStories();
+    return findStoryMatch(local, id);
+  });
+
+  const [isLoadingStory, setIsLoadingStory] = useState<boolean>(!resolvedStory);
+  const [hasAttemptedFetch, setHasAttemptedFetch] = useState<boolean>(false);
+
+  // Sync when parent stories prop changes or story is found
+  useEffect(() => {
+    if (!id) return;
+    const found = findStoryMatch(stories, id);
+    if (found) {
+      setResolvedStory(found);
+      setIsLoadingStory(false);
+    }
+  }, [stories, id]);
+
+  // Asynchronously fetch story from server API if not found locally
+  useEffect(() => {
+    if (!id || resolvedStory) return;
+
+    let isMounted = true;
+    setIsLoadingStory(true);
+
+    const fetchDirectStory = async () => {
+      try {
+        const encodedId = encodeURIComponent(id.trim());
+        const res = await fetch(`/api/stories/${encodedId}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (isMounted && data?.story) {
+            setResolvedStory(data.story);
+            if (Array.isArray(data.chapters) && data.chapters.length > 0) {
+              setChapters(data.chapters);
+            }
+            setIsLoadingStory(false);
+            setHasAttemptedFetch(true);
+            return;
+          }
+        }
+      } catch {
+        // Fallback to full sync
+      }
+
+      // Fallback: check /api/stories full list
+      try {
+        const resAll = await fetch('/api/stories');
+        if (resAll.ok) {
+          const allStories: Story[] = await resAll.json();
+          if (Array.isArray(allStories)) {
+            const found = findStoryMatch(allStories, id);
+            if (isMounted && found) {
+              setResolvedStory(found);
+              setIsLoadingStory(false);
+              setHasAttemptedFetch(true);
+              return;
+            }
+          }
+        }
+      } catch {}
+
+      if (isMounted) {
+        setIsLoadingStory(false);
+        setHasAttemptedFetch(true);
+      }
+    };
+
+    // Wait 150ms for initial prop sync before remote fetch
+    const timer = setTimeout(fetchDirectStory, 150);
+    return () => {
+      isMounted = false;
+      clearTimeout(timer);
+    };
+  }, [id, resolvedStory]);
 
   // Record view once when story is loaded
   useEffect(() => {
-    if (story) {
-      recordStoryView(story.id);
+    if (resolvedStory) {
+      recordStoryView(resolvedStory.id);
     }
-  }, [story?.id]);
+  }, [resolvedStory?.id]);
 
   // Realtime chapters state with fallback from mockData
   const [chapters, setChapters] = useState<Chapter[]>(() => {
-    if (!story) return [];
-    return getStoryChapters(story.id);
+    if (!resolvedStory) return [];
+    return getStoryChapters(resolvedStory.id);
   });
 
-  useEffect(() => {
-    if (!story) return;
-    // Initial mock chapters
-    const initial = getStoryChapters(story.id);
-    setChapters(initial);
+  const [isLoadingChapters, setIsLoadingChapters] = useState<boolean>(false);
 
-    // Subscribe to live chapters from Firestore if available
-    const unsubscribe = subscribeToStoryChapters(story.id, (liveChapters) => {
+  useEffect(() => {
+    if (!resolvedStory) return;
+    const initial = getStoryChapters(resolvedStory.id);
+    if (initial.length > 0) {
+      setChapters(initial);
+    } else {
+      setIsLoadingChapters(true);
+    }
+
+    // Subscribe to live chapters from server & cloud
+    const unsubscribe = subscribeToStoryChapters(resolvedStory.id, (liveChapters) => {
       if (liveChapters && liveChapters.length > 0) {
         setChapters(liveChapters);
+        setIsLoadingChapters(false);
       }
     });
+
+    // Also fetch directly from server API
+    fetch(`/api/chapters?storyId=${resolvedStory.id}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((serverChapters) => {
+        if (Array.isArray(serverChapters) && serverChapters.length > 0) {
+          setChapters(serverChapters);
+          setIsLoadingChapters(false);
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        setIsLoadingChapters(false);
+      });
 
     return () => {
       unsubscribe();
     };
-  }, [story?.id]);
+  }, [resolvedStory?.id]);
 
-  // 1. Story Not Found state
-  if (!story) {
+  // 1. Loading state
+  if (isLoadingStory) {
+    return (
+      <div className="max-w-md mx-auto py-24 px-4 text-center space-y-4">
+        <div className="w-12 h-12 mx-auto border-3 border-pink-500 border-t-transparent rounded-full animate-spin" />
+        <div className="space-y-1">
+          <p className="font-serif text-lg font-medium text-stone-700 dark:text-stone-200">
+            Đang mở tác phẩm... 🌸
+          </p>
+          <p className="text-xs text-stone-400 dark:text-stone-500">
+            Đang kiểm tra và đồng bộ dữ liệu truyện từ hệ thống...
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // 2. Story Not Found state (only shown after verification has completed)
+  if (!resolvedStory && hasAttemptedFetch) {
     return (
       <div className="max-w-2xl mx-auto py-16 px-4 text-center space-y-6">
         <div className="w-16 h-16 mx-auto rounded-3xl bg-pink-100 dark:bg-stone-800 text-pink-600 dark:text-pink-400 flex items-center justify-center shadow-xs">
@@ -85,6 +237,14 @@ export const StoryDetailPage: React.FC<StoryDetailPageProps> = ({ stories }) => 
           </Link>
           <button
             type="button"
+            onClick={() => window.location.reload()}
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-700 dark:text-stone-200 text-sm font-medium transition-colors cursor-pointer"
+          >
+            <RefreshCw className="w-4 h-4" />
+            <span>Thử tải lại</span>
+          </button>
+          <button
+            type="button"
             onClick={() => navigate(-1)}
             className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-700 dark:text-stone-200 text-sm font-medium transition-colors cursor-pointer"
           >
@@ -96,19 +256,38 @@ export const StoryDetailPage: React.FC<StoryDetailPageProps> = ({ stories }) => 
     );
   }
 
-  // 2. Reading a specific chapter route: /bai-viet/:id/chuong/:chapterNumber
+  // Fallback while still verifying
+  if (!resolvedStory) {
+    return (
+      <div className="max-w-md mx-auto py-24 px-4 text-center space-y-4">
+        <div className="w-10 h-10 mx-auto border-3 border-pink-400 border-t-transparent rounded-full animate-spin" />
+        <p className="font-serif text-sm text-stone-500">Đang chuẩn bị trang đọc...</p>
+      </div>
+    );
+  }
+
+  // 3. Reading a specific chapter route: /bai-viet/:id/chuong/:chapterNumber
   if (chapterNumber !== undefined) {
     const targetChapterNum = Number(chapterNumber);
     const chapter = chapters.find((c) => c.chapterNumber === targetChapterNum) || chapters[0];
 
     if (!chapter) {
+      if (isLoadingChapters) {
+        return (
+          <div className="max-w-md mx-auto py-24 px-4 text-center space-y-4">
+            <div className="w-10 h-10 mx-auto border-3 border-pink-400 border-t-transparent rounded-full animate-spin" />
+            <p className="font-serif text-sm text-stone-600 dark:text-stone-300">Đang tải chương truyện...</p>
+          </div>
+        );
+      }
+
       return (
         <div className="max-w-xl mx-auto py-16 px-4 text-center space-y-4">
           <p className="text-stone-600 dark:text-stone-300 font-serif">
-            Chưa tìm thấy chương {chapterNumber} của truyện <strong>{story.title}</strong>.
+            Chưa tìm thấy chương {chapterNumber} của truyện <strong>{resolvedStory.title}</strong>.
           </p>
           <Link
-            to={`/bai-viet/${story.id}`}
+            to={`/bai-viet/${resolvedStory.id}`}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-pink-500 text-white text-sm font-medium"
           >
             <BookOpen className="w-4 h-4" />
@@ -120,21 +299,21 @@ export const StoryDetailPage: React.FC<StoryDetailPageProps> = ({ stories }) => 
 
     return (
       <ReaderView
-        story={story}
+        story={resolvedStory}
         chapter={chapter}
         allChapters={chapters}
-        onBack={() => navigate(`/bai-viet/${story.id}`)}
-        onSelectChapter={(num) => navigate(`/bai-viet/${story.id}/chuong/${num}`)}
+        onBack={() => navigate(`/bai-viet/${resolvedStory.id}`)}
+        onSelectChapter={(num) => navigate(`/bai-viet/${resolvedStory.id}/chuong/${num}`)}
         onGoToPasswordGuide={() => navigate('/pass')}
-        onOpenStoryDetail={() => navigate(`/bai-viet/${story.id}`)}
+        onOpenStoryDetail={() => navigate(`/bai-viet/${resolvedStory.id}`)}
       />
     );
   }
 
-  // 3. Story Detail View: /bai-viet/:id
+  // 4. Story Detail View: /bai-viet/:id
   return (
     <StoryDetailView
-      story={story}
+      story={resolvedStory}
       chapters={chapters}
       onBack={() => {
         if (window.history.length > 2) {
@@ -143,7 +322,7 @@ export const StoryDetailPage: React.FC<StoryDetailPageProps> = ({ stories }) => 
           navigate('/');
         }
       }}
-      onSelectChapter={(num) => navigate(`/bai-viet/${story.id}/chuong/${num}`)}
+      onSelectChapter={(num) => navigate(`/bai-viet/${resolvedStory.id}/chuong/${num}`)}
       onGoToPasswordGuide={() => navigate('/pass')}
     />
   );
