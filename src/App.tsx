@@ -285,7 +285,7 @@ export default function App() {
   const filteredStories = stories.filter((story) => {
     if (storyFilter === 'completed' && story.status !== 'completed') return false;
     if (storyFilter === 'ongoing' && story.status !== 'ongoing') return false;
-    if (selectedGenreFilter !== 'all' && !(Array.isArray(story.genre) && story.genre.includes(selectedGenreFilter))) return false;
+    if (selectedGenreFilter !== 'all' && !story.genre.includes(selectedGenreFilter)) return false;
     return true;
   });
 
@@ -466,7 +466,7 @@ export default function App() {
 
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
                   <div className="lg:col-span-8">
-                    <OtherSections onOpenAuthorStudio={() => setIsAuthorModalOpen(true)} />
+                    <OtherSections />
                   </div>
                   <div className="lg:col-span-4">
                     <Sidebar
@@ -790,7 +790,7 @@ export default function App() {
                         {/* SUB-SECTION 3: OTHER (TÂM SỰ & NHẠC HÈ) */}
                         {activeLetter === 'other' && (
                           <div className="animate-in fade-in duration-300">
-                            <OtherSections onOpenAuthorStudio={() => setIsAuthorModalOpen(true)} />
+                            <OtherSections />
                           </div>
                         )}
                       </div>

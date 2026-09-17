@@ -102,7 +102,7 @@ export const ProfileEditModal: React.FC = () => {
       // Merge dynamic custom genres from site with favorite presets and user genres
       try {
         const siteGenres = getCustomGenres().filter(
-          (g) => g && typeof g === 'string' && !g.toLowerCase().includes('tất cả các thể loại') && !g.toLowerCase().includes('tất cả thể loại')
+          (g) => !g.toLowerCase().includes('tất cả các thể loại') && !g.toLowerCase().includes('tất cả thể loại')
         );
         const mergedSet = new Set([...FAVORITE_GENRE_OPTIONS, ...siteGenres, ...userGenres]);
         setAvailableGenres(Array.from(mergedSet));

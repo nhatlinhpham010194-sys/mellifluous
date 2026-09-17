@@ -53,11 +53,10 @@ export const SidebarStoryDropdown: React.FC<SidebarStoryDropdownProps> = ({
 
   // Filter stories based on search term and status tab
   const filteredStories = stories.filter((story) => {
-    const q = (searchTerm || '').toLowerCase();
     const matchesSearch =
-      (story.title && story.title.toLowerCase().includes(q)) ||
-      (story.author && story.author.toLowerCase().includes(q)) ||
-      (Array.isArray(story.genre) && story.genre.some((g) => g && g.toLowerCase().includes(q)));
+      story.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      story.author.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      story.genre.some((g) => g.toLowerCase().includes(searchTerm.toLowerCase()));
 
     if (!matchesSearch) return false;
     if (statusTab === 'completed') return story.status === 'completed';
