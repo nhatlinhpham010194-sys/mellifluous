@@ -117,7 +117,11 @@ export const saveChapter = (chapter: Chapter): Chapter => {
   const storyId = chapter.storyId;
   const list = cachedChapters[storyId] ? [...cachedChapters[storyId]] : [];
   
-  const existingIdx = list.findIndex((c) => c.id === chapter.id || (c.chapterNumber === chapter.chapterNumber && c.partType === chapter.partType));
+  const targetPart = chapter.partType || (chapter.isExtra ? 'extra' : 'main');
+  const existingIdx = list.findIndex((c) => {
+    const cPart = c.partType || (c.isExtra ? 'extra' : 'main');
+    return c.id === chapter.id || (c.chapterNumber === chapter.chapterNumber && cPart === targetPart);
+  });
   if (existingIdx >= 0) {
     list[existingIdx] = { ...list[existingIdx], ...chapter };
   } else {

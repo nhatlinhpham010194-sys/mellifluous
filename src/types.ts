@@ -28,6 +28,7 @@ export interface Chapter {
   chapterNumber: number;
   title: string;
   publishedAt: string;
+  updatedAt?: string;
   isLocked: boolean;
   passwordHint?: string;
   passwordKey?: string;
