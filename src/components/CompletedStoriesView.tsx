@@ -38,12 +38,12 @@ export const CompletedStoriesView: React.FC<CompletedStoriesViewProps> = ({
 
   // Extract all unique genres from completed stories
   const allGenres = Array.from(
-    new Set(completedStories.flatMap((s) => s.genre))
+    new Set(completedStories.flatMap((s) => (Array.isArray(s.genre) ? s.genre : [])))
   );
 
   // Apply genre filter and sorting
   const filtered = completedStories
-    .filter((s) => (selectedGenre === 'all' ? true : s.genre.includes(selectedGenre)))
+    .filter((s) => (selectedGenre === 'all' ? true : (Array.isArray(s.genre) && s.genre.includes(selectedGenre))))
     .sort((a, b) => {
       if (sortBy === 'views') return b.views - a.views;
       if (sortBy === 'likes') return b.likes - a.likes;
