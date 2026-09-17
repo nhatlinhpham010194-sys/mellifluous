@@ -20,6 +20,7 @@ export interface AudioTrack {
   fileSize?: string;
   addedBy?: string;
   createdAt?: string;
+  isLocalOnly?: boolean;
 }
 
 export type AudioSourceType = 'uploaded' | 'direct' | 'gdrive' | 'synth';
@@ -182,20 +183,56 @@ function audioBufferToWavBlob(buffer: AudioBuffer): Blob {
   return new Blob([view], { type: 'audio/wav' });
 }
 
+// URL Helper utilities for universal cross-device playback
+export function extractGoogleDriveId(url?: string): string | null {
+  if (!url || !url.includes('drive.google.com')) return null;
+  const match = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/) || url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+  return match && match[1] ? match[1] : null;
+}
+
+export function formatGoogleDriveStreamUrl(url: string): string {
+  const fileId = extractGoogleDriveId(url);
+  if (!fileId) return url;
+  return `https://docs.google.com/uc?export=download&id=${fileId}&confirm=t`;
+}
+
+export function convertDropboxToDirectUrl(url: string): string {
+  if (!url || !url.includes('dropbox.com')) return url;
+  let directUrl = url.replace(/[?&]dl=0/, '').replace(/[?&]dl=1/, '');
+  directUrl += directUrl.includes('?') ? '&raw=1' : '?raw=1';
+  return directUrl;
+}
+
+export function convertOneDriveToDirectUrl(url: string): string {
+  if (!url || (!url.includes('1drv.ms') && !url.includes('onedrive.live.com'))) return url;
+  return url.replace('redir?', 'download?');
+}
+
+export function resolveFullAudioUrl(url: string): string {
+  if (!url) return '';
+  if (url.startsWith('/api/') && typeof window !== 'undefined' && window.location.hostname.includes('github.io')) {
+    return `https://ais-dev-7omy3nxbcenuidl2tgny3y-286439284546.asia-southeast1.run.app${url}`;
+  }
+  return url;
+}
+
 // Memory cache for rendered melody WAV URLs
 const melodyWavUrlCache = new Map<number, string>();
 
 /**
  * Generates a warm, soothing ambient piano lofi WAV blob for default tracks
  * and returns a standard Blob URL that HTMLAudioElement can play natively.
+ * Strictly capped at 180s to prevent browser memory exhaustion.
  */
 async function generateMelodyWavUrl(trackIndex: number, durationSeconds = 180): Promise<string> {
   if (melodyWavUrlCache.has(trackIndex)) {
     return melodyWavUrlCache.get(trackIndex)!;
   }
 
+  // Safety Cap: OfflineAudioContext must never allocate excessive uncompressed PCM audio in memory.
+  const targetDuration = Math.min(180, Math.max(60, durationSeconds || 180));
   const sampleRate = 22050; // Optimized for rapid rendering and soft lofi warmth
-  const totalSamples = sampleRate * durationSeconds;
+  const totalSamples = sampleRate * targetDuration;
 
   const OfflineCtxClass =
     window.OfflineAudioContext ||
@@ -403,16 +440,21 @@ class BackgroundMusicEngine {
       this.notify();
     });
 
-    // 9. Error Handler with Automatic Proxy Fallback
+    // 9. Error Handler with Automatic Proxy & Resilient Ambient Melody Fallback
     this.audio.addEventListener('error', (e) => {
       console.warn('Audio element error event:', e);
       this.isLoading = false;
 
       const track = this.getCurrentTrack();
-      // If external link failed, try proxying through backend
-      if (track.audioUrl && !track.audioUrl.startsWith('/api/') && this.retryCount === 0) {
+      const rawUrl = track.audioUrl || '';
+
+      // If external link failed and backend proxy is reachable (and not already proxied or dead blob)
+      if (rawUrl && !rawUrl.startsWith('/api/') && !rawUrl.startsWith('blob:') && this.retryCount === 0) {
         this.retryCount = 1;
-        const proxyUrl = `/api/proxy-audio?url=${encodeURIComponent(track.audioUrl)}`;
+        const apiBase = (typeof window !== 'undefined' && window.location.hostname.includes('github.io'))
+          ? 'https://ais-dev-7omy3nxbcenuidl2tgny3y-286439284546.asia-southeast1.run.app'
+          : '';
+        const proxyUrl = `${apiBase}/api/proxy-audio?url=${encodeURIComponent(rawUrl)}`;
         console.log('Retrying audio playback through backend proxy:', proxyUrl);
         this.audio.src = proxyUrl;
         this.audio.load();
@@ -420,14 +462,16 @@ class BackgroundMusicEngine {
         return;
       }
 
-      // If still fails, fallback to built-in melody
-      if (this.retryCount === 1) {
+      // If still fails or dead blob from another device, fallback immediately to soothing ambient melody
+      if (this.retryCount <= 1) {
         this.retryCount = 2;
-        console.log('Falling back to built-in ambient piano melody for track.');
-        generateMelodyWavUrl(this.currentTrackIndex, this.duration).then((url) => {
+        console.log('Falling back to built-in ambient melody for track:', track.title);
+        this.currentSourceType = 'synth';
+        generateMelodyWavUrl(this.currentTrackIndex, 180).then((url) => {
           this.audio.src = url;
           this.audio.load();
           this.audio.play().catch(() => {});
+          this.notify();
         });
       }
     });
@@ -574,7 +618,7 @@ class BackgroundMusicEngine {
    * - If empty: generates high quality WAV Audio Blob from offline piano synth
    */
   private async resolvePlayableUrl(track: AudioTrack, trackIndex: number): Promise<string> {
-    // 1. Check client IndexedDB cache first
+    // 1. Check client IndexedDB cache first (if uploaded directly on THIS device)
     try {
       const localBlob = await getAudioBlobFromIDB(track.id);
       if (localBlob) {
@@ -587,43 +631,57 @@ class BackgroundMusicEngine {
       }
     } catch {}
 
-    const url = track.audioUrl?.trim();
+    const rawUrl = track.audioUrl?.trim() || '';
 
-    // 2. Direct server-hosted audio, data URL or existing blob URL
-    if (url && (url.startsWith('/api/') || url.startsWith('blob:') || url.startsWith('data:'))) {
+    // 2. Dead blob URL guard:
+    // A blob: URL is only valid on the single browser session where it was generated.
+    // If not in this device's IndexedDB, do not attempt to load it on a foreign device.
+    if (rawUrl.startsWith('blob:')) {
+      console.warn(`[BGM] Track "${track.title}" has a local blob URL from another device. Falling back to ambient melody.`);
+      this.currentSourceType = 'synth';
+      return await generateMelodyWavUrl(trackIndex, 180);
+    }
+
+    // 3. Direct server-hosted audio (/api/audio/...)
+    if (rawUrl.startsWith('/api/')) {
       this.currentSourceType = 'uploaded';
-      return url;
+      return resolveFullAudioUrl(rawUrl);
     }
 
-    // 3. Google Drive audio links -> Auto proxy via /api/proxy-audio
-    if (url && url.includes('drive.google.com')) {
+    // 4. Data URL
+    if (rawUrl.startsWith('data:audio/')) {
+      this.currentSourceType = 'uploaded';
+      return rawUrl;
+    }
+
+    // 5. Google Drive audio links -> Convert to direct streaming URL
+    if (rawUrl.includes('drive.google.com')) {
       this.currentSourceType = 'gdrive';
-      return `/api/proxy-audio?url=${encodeURIComponent(url)}`;
+      const driveDirectUrl = formatGoogleDriveStreamUrl(rawUrl);
+      return driveDirectUrl;
     }
 
-    // 4. Dropbox links
-    if (url && url.includes('dropbox.com')) {
+    // 6. Dropbox links
+    if (rawUrl.includes('dropbox.com')) {
       this.currentSourceType = 'direct';
-      let directUrl = url.replace(/[?&]dl=0/, '').replace(/[?&]dl=1/, '');
-      directUrl += directUrl.includes('?') ? '&raw=1' : '?raw=1';
-      return directUrl;
+      return convertDropboxToDirectUrl(rawUrl);
     }
 
-    // 5. OneDrive links
-    if (url && (url.includes('1drv.ms') || url.includes('onedrive.live.com'))) {
+    // 7. OneDrive links
+    if (rawUrl.includes('1drv.ms') || rawUrl.includes('onedrive.live.com')) {
       this.currentSourceType = 'direct';
-      return url.replace('redir?', 'download?');
+      return convertOneDriveToDirectUrl(rawUrl);
     }
 
-    // 6. Direct HTTP/HTTPS audio stream
-    if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
+    // 8. Direct HTTP/HTTPS audio stream
+    if (rawUrl.startsWith('http://') || rawUrl.startsWith('https://')) {
       this.currentSourceType = 'direct';
-      return url;
+      return rawUrl;
     }
 
-    // 7. Built-in sweet lofi piano melody -> generated to WAV Blob URL
+    // 9. Built-in sweet ambient piano melody -> generated to WAV Blob URL
     this.currentSourceType = 'synth';
-    const targetDuration = parseDurationToSeconds(track.duration) || 210;
+    const targetDuration = Math.min(180, parseDurationToSeconds(track.duration) || 180);
     return await generateMelodyWavUrl(trackIndex, targetDuration);
   }
 
@@ -782,7 +840,10 @@ class BackgroundMusicEngine {
 
     let publicUrl = '';
     try {
-      const res = await fetch('/api/upload-audio', {
+      const apiBase = (typeof window !== 'undefined' && window.location.hostname.includes('github.io'))
+        ? 'https://ais-dev-7omy3nxbcenuidl2tgny3y-286439284546.asia-southeast1.run.app'
+        : '';
+      const res = await fetch(`${apiBase}/api/upload-audio`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -808,11 +869,12 @@ class BackgroundMusicEngine {
       artist: (params.artist || 'Mellifluous').trim(),
       duration: params.duration || '03:30',
       mood: params.mood?.trim() || 'File âm thanh của bạn',
-      audioUrl: publicUrl || URL.createObjectURL(params.file),
+      audioUrl: publicUrl,
       sourceType: 'uploaded',
       fileSize: fileSizeStr,
       addedBy: params.addedBy || 'Tác giả',
       createdAt: new Date().toISOString(),
+      isLocalOnly: !publicUrl,
     };
 
     this.tracks.push(newTrack);

@@ -263,12 +263,15 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
     }
 
     try {
+      const u = editAudioUrl.trim();
+      const isStillLocal = !u || u.startsWith('blob:');
       await bgmEngine.updateTrack(trackId, {
         title: editTitle.trim(),
         artist: editArtist.trim() || 'Mellifluous',
-        audioUrl: editAudioUrl.trim() || undefined,
+        audioUrl: u || undefined,
         mood: editMood.trim() || undefined,
         duration: editDuration.trim() || undefined,
+        isLocalOnly: isStillLocal,
       });
       setEditingTrackId(null);
       onFeedback('success', 'Đã cập nhật thông tin bài hát thành công!');
@@ -337,11 +340,13 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
 
   const getSourceBadge = (t: AudioTrack) => {
     const u = (t.audioUrl || '').toLowerCase();
-    if (t.sourceType === 'uploaded' || u.startsWith('/api/audio') || u.startsWith('blob:')) {
+    const isLocal = t.isLocalOnly || u.startsWith('blob:') || (t.sourceType === 'uploaded' && !t.audioUrl);
+
+    if (isLocal) {
       return (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 text-[10px] font-medium border border-emerald-200/80 dark:border-emerald-800">
-          <HardDrive className="w-3 h-3" />
-          <span>File tải lên</span>
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-50 dark:bg-amber-950/60 text-amber-800 dark:text-amber-200 text-[10px] font-medium border border-amber-300 dark:border-amber-800" title="Bản nhạc này chỉ lưu trên máy này. Độc giả ở máy khác sẽ nghe giai điệu hòa tấu dự phòng.">
+          <HardDrive className="w-3 h-3 text-amber-600" />
+          <span>Lưu máy cục bộ</span>
         </span>
       );
     }
@@ -349,22 +354,22 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
       return (
         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-300 text-[10px] font-medium border border-sky-200/80 dark:border-sky-800">
           <CloudIcon className="w-3 h-3" />
-          <span>Google Drive</span>
+          <span>Google Drive (Mọi thiết bị)</span>
         </span>
       );
     }
-    if (t.audioUrl) {
+    if (t.audioUrl && (u.startsWith('http://') || u.startsWith('https://') || u.startsWith('/api/'))) {
       return (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-pink-50 dark:bg-pink-950/60 text-pink-700 dark:text-pink-300 text-[10px] font-medium border border-pink-200/80 dark:border-pink-800">
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 text-[10px] font-medium border border-emerald-200/80 dark:border-emerald-800">
           <LinkIcon className="w-3 h-3" />
-          <span>Link trực tuyến</span>
+          <span>Link trực tuyến (Toàn cầu)</span>
         </span>
       );
     }
     return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 text-[10px] font-medium border border-amber-200/80 dark:border-amber-800">
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-pink-50 dark:bg-pink-950/60 text-pink-700 dark:text-pink-300 text-[10px] font-medium border border-pink-200/80 dark:border-pink-800">
         <Sparkles className="w-3 h-3" />
-        <span>Giai điệu lofi</span>
+        <span>Giai điệu thư giãn</span>
       </span>
     );
   };
@@ -513,18 +518,6 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
           <div className="flex items-center p-1 rounded-xl bg-stone-100 dark:bg-stone-900 border border-stone-200 dark:border-stone-800">
             <button
               type="button"
-              onClick={() => setInputMode('upload')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
-                inputMode === 'upload'
-                  ? 'bg-white dark:bg-stone-800 text-pink-600 dark:text-pink-400 shadow-xs'
-                  : 'text-stone-600 dark:text-stone-400 hover:text-stone-900'
-              }`}
-            >
-              <Upload className="w-3.5 h-3.5" />
-              <span>Tải file từ máy (Khuyên dùng)</span>
-            </button>
-            <button
-              type="button"
               onClick={() => setInputMode('link')}
               className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
                 inputMode === 'link'
@@ -533,7 +526,19 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
               }`}
             >
               <LinkIcon className="w-3.5 h-3.5" />
-              <span>Dán đường link</span>
+              <span>Dán link Google Drive / Online (Khuyên dùng)</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setInputMode('upload')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                inputMode === 'upload'
+                  ? 'bg-white dark:bg-stone-800 text-pink-600 dark:text-pink-400 shadow-xs'
+                  : 'text-stone-600 dark:text-stone-400 hover:text-stone-900'
+              }`}
+            >
+              <Upload className="w-3.5 h-3.5" />
+              <span>Tải file từ máy</span>
             </button>
           </div>
         </div>
@@ -542,6 +547,13 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
           {/* UPLOAD FILE TAB */}
           {inputMode === 'upload' ? (
             <div className="space-y-3">
+              <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200/80 dark:border-amber-800 text-amber-800 dark:text-amber-200 text-xs flex items-start gap-2">
+                <span className="text-sm shrink-0">💡</span>
+                <p>
+                  <strong>Lưu ý về phát đa thiết bị:</strong> Tải file trực tiếp từ máy sẽ lưu trữ vào bộ nhớ thiết bị của bạn. Để đảm bảo <strong>100% độc giả trên mọi điện thoại, máy tính, máy chủ khác</strong> đều cùng nghe được bài hát, hãy tải file lên <strong>Google Drive</strong> (chọn quyền <em>"Bất kỳ ai có đường link đều có thể xem"</em>) rồi dán link vào tab <strong>"Dán link Google Drive"</strong>!
+                </p>
+              </div>
+
               {/* Drag & Drop Area */}
               <div
                 onDragOver={handleDragOver}
@@ -604,21 +616,40 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
             </div>
           ) : (
             /* LINK TAB */
-            <div className="space-y-2">
-              <label className="text-[11px] font-semibold text-stone-800 dark:text-stone-200 flex items-center gap-1.5">
-                <LinkIcon className="w-3.5 h-3.5 text-pink-500" />
-                <span>Nhập link phát nhạc trực tuyến:</span>
-              </label>
-              <input
-                type="url"
-                value={audioUrl}
-                onChange={(e) => setAudioUrl(e.target.value)}
-                placeholder="Dán link Google Drive chia sẻ công khai, file direct .mp3, Dropbox, v.v..."
-                className="w-full px-3.5 py-2.5 rounded-xl bg-stone-50 dark:bg-stone-900 border border-stone-300 dark:border-stone-600 text-stone-900 dark:text-stone-100 text-xs sm:text-sm font-mono focus:ring-2 focus:ring-pink-400 focus:outline-hidden"
-              />
-              <p className="text-[11px] text-stone-500 dark:text-stone-400">
-                💡 <span className="font-medium">Link Google Drive</span>: Mở quyền truy cập "Bất kỳ ai có đường link đều có thể xem" rồi dán vào đây. Hệ thống tự động chuyển tiếp và phát mượt mà qua trình phát thống nhất.
-              </p>
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-semibold text-stone-800 dark:text-stone-200 flex items-center gap-1.5">
+                  <LinkIcon className="w-3.5 h-3.5 text-pink-500" />
+                  <span>Dán đường link âm thanh (Google Drive / Dropbox / Link direct .mp3):</span>
+                </label>
+                <input
+                  type="url"
+                  value={audioUrl}
+                  onChange={(e) => setAudioUrl(e.target.value)}
+                  placeholder="https://drive.google.com/file/d/.../view?usp=sharing hoặc link .mp3"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-stone-50 dark:bg-stone-900 border border-stone-300 dark:border-stone-600 text-stone-900 dark:text-stone-100 text-xs sm:text-sm font-mono focus:ring-2 focus:ring-pink-400 focus:outline-hidden"
+                />
+              </div>
+
+              {audioUrl.includes('drive.google.com') && (
+                <div className="p-2.5 rounded-xl bg-sky-50 dark:bg-sky-950/40 border border-sky-200 dark:border-sky-800 text-sky-800 dark:text-sky-200 text-xs flex items-center gap-2">
+                  <CloudIcon className="w-4 h-4 text-sky-600 shrink-0" />
+                  <span>
+                    ✅ <strong>Nhận diện link Google Drive!</strong> Hệ thống sẽ tự động phát trực tiếp trên mọi thiết bị (máy tính, điện thoại, máy chủ khác). Hãy chắc chắn file đã chọn quyền <em>"Bất kỳ ai có đường link đều có thể xem"</em>.
+                  </span>
+                </div>
+              )}
+
+              <div className="p-3 rounded-xl bg-stone-50 dark:bg-stone-900 border border-stone-200 dark:border-stone-800 text-[11px] text-stone-600 dark:text-stone-400 space-y-1">
+                <p className="font-semibold text-stone-800 dark:text-stone-200 flex items-center gap-1">
+                  <span>✨ 3 bước tải nhạc Google Drive để phát cho mọi độc giả:</span>
+                </p>
+                <ol className="list-decimal list-inside space-y-0.5 text-stone-600 dark:text-stone-300 pl-1">
+                  <li>Tải file MP3 hoặc bài hát lên <strong>Google Drive</strong> của bạn.</li>
+                  <li>Nhấp chuột phải vào file → chọn <strong>Chia sẻ (Share)</strong> → chuyển sang <strong>"Bất kỳ ai có đường link"</strong>.</li>
+                  <li>Sao chép link và dán vào ô phía trên. Hệ thống tự động chuyển tiếp để toàn bộ độc giả nghe được!</li>
+                </ol>
+              </div>
             </div>
           )}
 
@@ -826,6 +857,18 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
                     <p className="text-[11px] text-stone-500 dark:text-stone-400 truncate mt-0.5">
                       {t.artist} • {t.mood || 'Thư giãn'} {t.fileSize ? `(${t.fileSize})` : ''}
                     </p>
+                    {(t.isLocalOnly || (t.audioUrl && t.audioUrl.startsWith('blob:')) || (t.sourceType === 'uploaded' && !t.audioUrl)) && (
+                      <div className="mt-1 flex items-center gap-1.5 text-[10.5px] text-amber-700 dark:text-amber-300">
+                        <span>⚠️ Chỉ lưu trên máy này.</span>
+                        <button
+                          type="button"
+                          onClick={() => handleStartEdit(t)}
+                          className="underline font-medium hover:text-amber-900 dark:hover:text-amber-100 cursor-pointer"
+                        >
+                          Bấm Sửa để dán link Google Drive (để độc giả ở máy khác cùng nghe)
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
 
