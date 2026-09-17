@@ -6,7 +6,7 @@ import {defineConfig} from 'vite';
 export default defineConfig(() => {
   const isGitHubActions = process.env.GITHUB_ACTIONS === 'true' || process.env.CI === 'true';
   return {
-    base: isGitHubActions ? '/binhyentronggio/' : '/',
+    base: isGitHubActions ? '/mellifluous/' : '/',
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
