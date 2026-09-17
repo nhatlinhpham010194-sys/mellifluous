@@ -136,7 +136,7 @@ export const saveChapter = (chapter: Chapter): Chapter => {
   const storyIdx = cachedStories.findIndex((s) => s.id === storyId);
   if (storyIdx >= 0) {
     cachedStories[storyIdx].completedChapters = list.length;
-    cachedStories[storyIdx].updatedAt = 'Vừa đăng';
+    cachedStories[storyIdx].updatedAt = new Date().toISOString();
     writeJsonSafe(STORIES_FILE, cachedStories);
   }
 
@@ -152,6 +152,7 @@ export const deleteChapter = (storyId: string, chapterId: string): boolean => {
     const storyIdx = cachedStories.findIndex((s) => s.id === storyId);
     if (storyIdx >= 0) {
       cachedStories[storyIdx].completedChapters = cachedChapters[storyId].length;
+      cachedStories[storyIdx].updatedAt = new Date().toISOString();
       writeJsonSafe(STORIES_FILE, cachedStories);
     }
     return true;

@@ -20,6 +20,7 @@ import {
   serverTimestamp,
   arrayUnion,
   arrayRemove,
+  enableNetwork,
   disableNetwork,
   type Firestore,
   type SetOptions,
@@ -72,44 +73,26 @@ export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
 
 // ============================================================================
-// FIRESTORE QUOTA CIRCUIT BREAKER & GRACEFUL DEGRADATION ENGINE
-// Protects the app from daily quota exhaustion (20,000 writes/day free tier)
-// and prevents infinite backoff retry loops in console.
+// FIRESTORE CONNECTION & QUOTA RESILIENCE
+// Ensures Firestore network is always active and user content writes always execute.
 // ============================================================================
 
-let isQuotaExhaustedMemory = false;
-try {
-  if (typeof window !== 'undefined' && sessionStorage.getItem('mel_fs_quota_exceeded') === 'true') {
-    isQuotaExhaustedMemory = true;
-  }
-} catch {}
-
-export const isFirestoreQuotaExhausted = (): boolean => isQuotaExhaustedMemory;
-
-export const markFirestoreQuotaExhausted = () => {
-  if (!isQuotaExhaustedMemory) {
-    isQuotaExhaustedMemory = true;
-    try {
-      if (typeof window !== 'undefined') {
-        sessionStorage.setItem('mel_fs_quota_exceeded', 'true');
-      }
-    } catch {}
-    // Disable Firestore network write-stream retries to stop the backoff loop immediately
-    try {
-      disableNetwork(db).catch(() => {});
-    } catch {}
-    console.info(
-      '[Mellifluous Storage] Firestore write quota reached for today. System seamlessly transitioned to Local & Server persistence engine.'
-    );
-  }
-};
-
-// If session was already marked exhausted, disable network immediately on load
-if (isQuotaExhaustedMemory) {
+// Clean up any stale quota locks from previous sessions
+if (typeof window !== 'undefined') {
   try {
-    disableNetwork(db).catch(() => {});
+    sessionStorage.removeItem('mel_fs_quota_exceeded');
+    localStorage.removeItem('mel_fs_quota_exceeded');
+  } catch {}
+  try {
+    enableNetwork(db).catch(() => {});
   } catch {}
 }
+
+export const isFirestoreQuotaExhausted = (): boolean => false;
+
+export const markFirestoreQuotaExhausted = () => {
+  console.warn('[Firestore] Notice: Write operation quota warning received from Google Cloud.');
+};
 
 export const checkAndHandleQuotaError = (err: any): boolean => {
   if (!err) return false;
@@ -121,21 +104,18 @@ export const checkAndHandleQuotaError = (err: any): boolean => {
     msg.includes('Quota limit exceeded') ||
     msg.includes('Free daily write units')
   ) {
-    markFirestoreQuotaExhausted();
+    console.warn('[Firestore] Daily free write quota reached on project. Attempting graceful fallback:', err);
     return true;
   }
   return false;
 };
 
-// Safe setDoc wrapper: skips Firestore writes if quota is exceeded
+// Resilient setDoc wrapper: always attempts Firestore write, gracefully catches quota errors
 export const setDoc = async (
   docRef: DocumentReference<DocumentData>,
   data: DocumentData,
   options?: SetOptions
 ): Promise<void> => {
-  if (isQuotaExhaustedMemory) {
-    return Promise.resolve();
-  }
   try {
     if (options) {
       await rawSetDoc(docRef, data, options);
@@ -150,15 +130,12 @@ export const setDoc = async (
   }
 };
 
-// Safe updateDoc wrapper: skips Firestore writes if quota is exceeded
+// Resilient updateDoc wrapper: always attempts Firestore write, gracefully catches quota errors
 export const updateDoc = async (
   docRef: DocumentReference<DocumentData>,
   dataOrField: UpdateData<DocumentData> | string,
   ...moreFieldsAndValues: any[]
 ): Promise<void> => {
-  if (isQuotaExhaustedMemory) {
-    return Promise.resolve();
-  }
   try {
     await (rawUpdateDoc as any)(docRef, dataOrField, ...moreFieldsAndValues);
   } catch (err: any) {
@@ -169,11 +146,8 @@ export const updateDoc = async (
   }
 };
 
-// Safe deleteDoc wrapper: skips Firestore writes if quota is exceeded
+// Resilient deleteDoc wrapper: always attempts Firestore write, gracefully catches quota errors
 export const deleteDoc = async (docRef: DocumentReference<DocumentData>): Promise<void> => {
-  if (isQuotaExhaustedMemory) {
-    return Promise.resolve();
-  }
   try {
     await rawDeleteDoc(docRef);
   } catch (err: any) {
@@ -184,14 +158,11 @@ export const deleteDoc = async (docRef: DocumentReference<DocumentData>): Promis
   }
 };
 
-// Safe addDoc wrapper: skips Firestore writes if quota is exceeded
+// Resilient addDoc wrapper: always attempts Firestore write, gracefully catches quota errors
 export const addDoc = async (
   collectionRef: CollectionReference<DocumentData>,
   data: DocumentData
 ): Promise<any> => {
-  if (isQuotaExhaustedMemory) {
-    return Promise.resolve({ id: 'local_' + Date.now() });
-  }
   try {
     return await rawAddDoc(collectionRef, data);
   } catch (err: any) {
@@ -202,33 +173,24 @@ export const addDoc = async (
   }
 };
 
-// Safe writeBatch wrapper
+// Resilient writeBatch wrapper
 export const writeBatch = (firestore: Firestore) => {
   const batch = rawWriteBatch(firestore);
   return {
     set: (docRef: DocumentReference<DocumentData>, data: DocumentData, options?: SetOptions) => {
-      if (!isQuotaExhaustedMemory) {
-        if (options) batch.set(docRef, data, options);
-        else batch.set(docRef, data);
-      }
+      if (options) batch.set(docRef, data, options);
+      else batch.set(docRef, data);
       return batch;
     },
     update: (docRef: DocumentReference<DocumentData>, dataOrField: any, ...more: any[]) => {
-      if (!isQuotaExhaustedMemory) {
-        (batch.update as any)(docRef, dataOrField, ...more);
-      }
+      (batch.update as any)(docRef, dataOrField, ...more);
       return batch;
     },
     delete: (docRef: DocumentReference<DocumentData>) => {
-      if (!isQuotaExhaustedMemory) {
-        batch.delete(docRef);
-      }
+      batch.delete(docRef);
       return batch;
     },
     commit: async (): Promise<void> => {
-      if (isQuotaExhaustedMemory) {
-        return Promise.resolve();
-      }
       try {
         await batch.commit();
       } catch (err: any) {

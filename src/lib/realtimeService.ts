@@ -1651,56 +1651,53 @@ export const subscribeToPublishedStories = (
         snapshot.forEach((d) => {
           const item = d.data() as any;
           const sId = item.id || item.storyId || d.id;
-          if (!item.deleted && !cloudDeletedIds.has(sId) && !localDeletedIds.has(sId)) {
-            const localStory = localMap.get(sId);
-            const localTime = localStory ? new Date(localStory.updatedAt || 0).getTime() : 0;
-            const cloudTime = new Date(item.updatedAt || item.publishedAt || 0).getTime();
+          if (item.deleted || cloudDeletedIds.has(sId) || localDeletedIds.has(sId)) {
+            cloudDeletedIds.add(sId);
+            seenIds.add(sId);
+            return;
+          }
 
-            if (localStory && !isNaN(localTime) && !isNaN(cloudTime) && localTime > cloudTime) {
-              list.push(localStory);
+          if (item.title && item.author) {
+            const fullStory: Story = {
+              id: sId,
+              title: item.title,
+              originalTitle: item.originalTitle || '',
+              author: item.author,
+              translator: item.translator || 'Mellifluous',
+              status: item.status || 'ongoing',
+              genre: Array.isArray(item.genre) && item.genre.length > 0 ? item.genre : ['Ngôn tình', 'Ngọt sủng'],
+              summary: item.summary || '',
+              totalChapters: Number(item.totalChapters) || 1,
+              completedChapters: Number(item.completedChapters) || 0,
+              mainChaptersCount: Number(item.mainChaptersCount) || Number(item.totalChapters) || 1,
+              extraChaptersCount: Number(item.extraChaptersCount) || 0,
+              coverImage: item.coverImage || 'https://images.unsplash.com/photo-1518895949257-7621c3c786d7?q=80&w=800&auto=format&fit=crop',
+              colorTheme: item.colorTheme || 'from-pink-100 to-rose-200 dark:from-pink-950/40 dark:to-rose-900/40',
+              hasPassword: Boolean(item.hasPassword),
+              passwordHint: item.passwordHint || '',
+              passwordKey: item.passwordKey || '',
+              updatedAt: item.updatedAt || 'Vừa đăng',
+              views: Number(item.views) || 0,
+              likes: Number(item.likes) || 0,
+              featured: Boolean(item.featured),
+            };
+            list.push(fullStory);
+            seenIds.add(sId);
+          } else {
+            const baseStory = STORIES.find((s) => s.id === sId);
+            if (baseStory) {
+              list.push({
+                ...baseStory,
+                views: Number(item.views) || baseStory.views,
+                likes: Number(item.likes) || baseStory.likes,
+                completedChapters: Number(item.completedChapters) || baseStory.completedChapters,
+              });
               seenIds.add(sId);
-            } else if (item.title && item.author) {
-              const fullStory: Story = {
-                id: sId,
-                title: item.title,
-                originalTitle: item.originalTitle || '',
-                author: item.author,
-                translator: item.translator || 'Mellifluous',
-                status: item.status || 'ongoing',
-                genre: Array.isArray(item.genre) && item.genre.length > 0 ? item.genre : ['Ngôn tình', 'Ngọt sủng'],
-                summary: item.summary || '',
-                totalChapters: Number(item.totalChapters) || 1,
-                completedChapters: Number(item.completedChapters) || 0,
-                mainChaptersCount: Number(item.mainChaptersCount) || Number(item.totalChapters) || 1,
-                extraChaptersCount: Number(item.extraChaptersCount) || 0,
-                coverImage: item.coverImage || 'https://images.unsplash.com/photo-1518895949257-7621c3c786d7?q=80&w=800&auto=format&fit=crop',
-                colorTheme: item.colorTheme || 'from-pink-100 to-rose-200 dark:from-pink-950/40 dark:to-rose-900/40',
-                hasPassword: Boolean(item.hasPassword),
-                passwordHint: item.passwordHint || '',
-                passwordKey: item.passwordKey || '',
-                updatedAt: item.updatedAt || 'Vừa đăng',
-                views: Number(item.views) || 0,
-                likes: Number(item.likes) || 0,
-                featured: Boolean(item.featured),
-              };
-              list.push(fullStory);
-              seenIds.add(sId);
-            } else {
-              const baseStory = STORIES.find((s) => s.id === sId);
-              if (baseStory) {
-                list.push({
-                  ...baseStory,
-                  views: Number(item.views) || baseStory.views,
-                  likes: Number(item.likes) || baseStory.likes,
-                  completedChapters: Number(item.completedChapters) || baseStory.completedChapters,
-                });
-                seenIds.add(sId);
-              }
             }
           }
         });
 
-        // Ensure any local author-created or baseline stories not explicitly deleted are retained
+        // Ensure any local author-created stories not in Firestore yet and not deleted are retained
         currentStored.forEach((stored) => {
           if (!seenIds.has(stored.id) && !cloudDeletedIds.has(stored.id) && !localDeletedIds.has(stored.id)) {
             list.push(stored);
@@ -1871,7 +1868,7 @@ export const publishStory = async (story: Story): Promise<void> => {
     }
   };
 
-  syncTasks.push(withTimeout(firestoreSync(), 3500).catch((err) => console.warn('Firestore story timeout:', err)));
+  syncTasks.push(withTimeout(firestoreSync(), 10000).catch((err) => console.warn('Firestore story timeout:', err)));
 
   // Safely wait for background tasks without hanging
   await Promise.allSettled(syncTasks);
@@ -1911,16 +1908,14 @@ export const deleteStory = async (storyId: string): Promise<void> => {
   delTasks.push(
     fetchWithTimeout(`/api/stories/${encodeURIComponent(storyId)}`, {
       method: 'DELETE',
-    }, 3000).catch((apiErr) => {
+    }, 6000).catch((apiErr) => {
       console.warn('Server API delete story warning:', apiErr);
     })
   );
 
   const firestoreDelete = async () => {
     try {
-      await deleteDoc(doc(db, 'story_stats', storyId)).catch(() => {});
-      await setDoc(doc(db, 'story_stats', storyId), { deleted: true, storyId }, { merge: true }).catch(() => {});
-
+      await setDoc(doc(db, 'story_stats', storyId), { deleted: true, storyId, updatedAt: new Date().toISOString() }, { merge: true }).catch(() => {});
       await deleteDoc(doc(db, 'stories', storyId)).catch(() => {});
 
       const statsDelRef = doc(db, 'site_stats', 'deleted_records');
@@ -1933,7 +1928,10 @@ export const deleteStory = async (storyId: string): Promise<void> => {
       const qStats = query(collection(db, 'chapter_stats'), where('storyId', '==', storyId));
       const snapStats = await getDocs(qStats);
       const batchStats = writeBatch(db);
-      snapStats.forEach((d) => batchStats.delete(d.ref));
+      snapStats.forEach((d) => {
+        batchStats.set(doc(db, 'chapter_stats', d.id), { deleted: true }, { merge: true });
+        batchStats.delete(d.ref);
+      });
       await batchStats.commit().catch(() => {});
 
       // Also attempt old chapters collection
@@ -1950,7 +1948,7 @@ export const deleteStory = async (storyId: string): Promise<void> => {
     }
   };
 
-  delTasks.push(withTimeout(firestoreDelete(), 3500).catch((err) => console.warn('Firestore delete timeout:', err)));
+  delTasks.push(withTimeout(firestoreDelete(), 10000).catch((err) => console.warn('Firestore delete timeout:', err)));
 
   await Promise.allSettled(delTasks);
 };
@@ -1985,9 +1983,14 @@ export const subscribeToAllChapters = (
         } catch {}
 
         const grouped: Record<string, Chapter[]> = {};
+        const storiesWithCloudChapters = new Set<string>();
+
         snapshot.forEach((d) => {
           const ch = { ...(d.data() as any), id: d.id };
-          if (ch.storyId && !ch.deleted && !cloudDeletedChapterIds.has(ch.id)) {
+          if (ch.storyId) storiesWithCloudChapters.add(ch.storyId);
+          if (ch.deleted) {
+            cloudDeletedChapterIds.add(ch.id);
+          } else if (ch.storyId && !cloudDeletedChapterIds.has(ch.id)) {
             if (!grouped[ch.storyId]) grouped[ch.storyId] = [];
             grouped[ch.storyId].push(ch);
           }
@@ -2000,14 +2003,14 @@ export const subscribeToAllChapters = (
           grouped['anh-dao-5cm'] = grouped['anh-dao-nam-centimet'];
         }
 
-        // Ensure EVERY known story is represented (merge with local and sample chapters)
+        // Only fallback to baseline sample chapters for stories that have never had chapters published in Firestore
         const currentStories = getStoredStories();
         currentStories.forEach((s) => {
-          const localList = getStoryChapters(s.id);
-          if (!grouped[s.id] || grouped[s.id].length === 0) {
-            grouped[s.id] = localList.length > 0 ? localList : (SAMPLE_CHAPTERS[s.id] || []);
-          } else if (localList.length > 0) {
-            grouped[s.id] = mergeChapters(localList, grouped[s.id]);
+          if (!storiesWithCloudChapters.has(s.id) && (!grouped[s.id] || grouped[s.id].length === 0)) {
+            const baseSamples = (SAMPLE_CHAPTERS[s.id] || []).filter((ch) => !cloudDeletedChapterIds.has(ch.id));
+            if (baseSamples.length > 0) {
+              grouped[s.id] = baseSamples;
+            }
           }
         });
 
@@ -2125,21 +2128,28 @@ export const subscribeToStoryChapters = (
         } catch {}
 
         const cloudChapters: Chapter[] = [];
+        let hasAnyDocForThisStory = false;
         snapshot.forEach((d) => {
+          hasAnyDocForThisStory = true;
           const ch = { ...(d.data() as any), id: d.id };
-          if (!ch.deleted && !cloudDeletedChapterIds.has(ch.id)) {
+          if (ch.deleted) {
+            cloudDeletedChapterIds.add(ch.id);
+          } else if (!cloudDeletedChapterIds.has(ch.id)) {
             cloudChapters.push(ch);
           }
         });
 
-        const currentLocal = getStoryChapters(storyId);
         let finalChapters: Chapter[] = [];
 
         if (cloudChapters.length > 0) {
-          finalChapters = mergeChapters(currentLocal, cloudChapters);
+          finalChapters = cloudChapters;
+        } else if (hasAnyDocForThisStory) {
+          // If docs existed in Firestore for this story but all are marked deleted, finalChapters is empty
+          finalChapters = [];
         } else {
-          // If Firestore returns 0 documents, DO NOT wipe existing chapters!
-          finalChapters = currentLocal.length > 0 ? currentLocal : (SAMPLE_CHAPTERS[storyId] || (aliasId ? SAMPLE_CHAPTERS[aliasId] : []) || []);
+          // Fallback to sample chapters only if this baseline story never had cloud chapters
+          const baseSamples = (SAMPLE_CHAPTERS[storyId] || (aliasId ? SAMPLE_CHAPTERS[aliasId] : []) || []);
+          finalChapters = baseSamples.filter((ch) => !cloudDeletedChapterIds.has(ch.id));
         }
 
         finalChapters.sort((a, b) => {
@@ -2151,15 +2161,13 @@ export const subscribeToStoryChapters = (
           return isExtraA - isExtraB;
         });
 
-        if (finalChapters.length > 0) {
-          try {
-            localStorage.setItem(`mel_chapters_${storyId}`, JSON.stringify(finalChapters));
-            if (aliasId) localStorage.setItem(`mel_chapters_${aliasId}`, JSON.stringify(finalChapters));
-          } catch {}
-          setLiveStoryChapters(storyId, finalChapters);
-          callback(finalChapters);
-          notifyChapterSubscribers(storyId, finalChapters);
-        }
+        try {
+          localStorage.setItem(`mel_chapters_${storyId}`, JSON.stringify(finalChapters));
+          if (aliasId) localStorage.setItem(`mel_chapters_${aliasId}`, JSON.stringify(finalChapters));
+        } catch {}
+        setLiveStoryChapters(storyId, finalChapters);
+        callback(finalChapters);
+        notifyChapterSubscribers(storyId, finalChapters);
       },
       (err) => {
         console.warn(`chapter_stats snapshot error for ${storyId}:`, err);
@@ -2302,7 +2310,7 @@ export const publishChapter = async (chapter: Chapter): Promise<void> => {
     }
   };
 
-  syncTasks.push(withTimeout(firestoreSync(), 3500).catch((err) => console.warn('Firestore chapter timeout:', err)));
+    syncTasks.push(withTimeout(firestoreSync(), 10000).catch((err) => console.warn('Firestore chapter timeout:', err)));
 
   await Promise.allSettled(syncTasks);
 };
@@ -2336,7 +2344,7 @@ export const deleteChapter = async (storyId: string, chapterId: string): Promise
   delTasks.push(
     fetchWithTimeout(`/api/chapters/${encodeURIComponent(chapterId)}?storyId=${encodeURIComponent(storyId)}`, {
       method: 'DELETE',
-    }, 3000).catch((apiErr) => {
+    }, 6000).catch((apiErr) => {
       console.warn('Server API chapter delete warning:', apiErr);
     })
   );
@@ -2344,8 +2352,8 @@ export const deleteChapter = async (storyId: string, chapterId: string): Promise
   // Cloud Firestore delete with timeout
   const firestoreDelete = async () => {
     try {
-      await deleteDoc(doc(db, 'chapter_stats', chapterId)).catch(() => {});
-      await setDoc(doc(db, 'chapter_stats', chapterId), { deleted: true, id: chapterId }, { merge: true }).catch(() => {});
+      await setDoc(doc(db, 'chapter_stats', chapterId), { deleted: true, id: chapterId, storyId }, { merge: true }).catch(() => {});
+      await deleteDoc(doc(db, 'chapters', chapterId)).catch(() => {});
 
       // Record deletion in site_stats/deleted_records
       const statsDelRef = doc(db, 'site_stats', 'deleted_records');
@@ -2355,20 +2363,19 @@ export const deleteChapter = async (storyId: string, chapterId: string): Promise
       const storyStatsRef = doc(db, 'story_stats', storyId);
       await setDoc(
         storyStatsRef,
-        { completedChapters: remaining.length },
+        { completedChapters: remaining.length, updatedAt: new Date().toISOString() },
         { merge: true }
       ).catch(() => {});
 
       // Also attempt chapters & stories collections
-      await deleteDoc(doc(db, 'chapters', chapterId)).catch(() => {});
       const storyRef = doc(db, 'stories', storyId);
-      await setDoc(storyRef, { completedChapters: remaining.length }, { merge: true }).catch(() => {});
+      await setDoc(storyRef, { completedChapters: remaining.length, updatedAt: new Date().toISOString() }, { merge: true }).catch(() => {});
     } catch (err) {
       console.warn('Firestore delete chapter note:', err);
     }
   };
 
-  delTasks.push(withTimeout(firestoreDelete(), 3500).catch((err) => console.warn('Firestore delete chapter timeout:', err)));
+  delTasks.push(withTimeout(firestoreDelete(), 10000).catch((err) => console.warn('Firestore delete chapter timeout:', err)));
 
   await Promise.allSettled(delTasks);
 };

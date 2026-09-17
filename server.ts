@@ -98,6 +98,36 @@ app.get('/api/sync', (req: Request, res: Response) => {
   });
 });
 
+app.post('/api/sync', (req: Request, res: Response) => {
+  try {
+    const { stories, chapters, deletedStoryIds, deletedChapterIds } = req.body;
+    if (Array.isArray(stories) && stories.length > 0) {
+      stories.forEach((s) => saveStory(s));
+      broadcastEvent('stories_synced', { count: stories.length });
+    }
+    if (chapters && typeof chapters === 'object') {
+      for (const [sId, list] of Object.entries(chapters)) {
+        if (Array.isArray(list)) {
+          list.forEach((c: any) => saveChapter(c));
+        }
+      }
+      broadcastEvent('chapters_synced', { count: Object.keys(chapters).length });
+    }
+    if (Array.isArray(deletedStoryIds)) {
+      deletedStoryIds.forEach((id: string) => deleteStory(id));
+      broadcastEvent('story_deleted', { ids: deletedStoryIds });
+    }
+    if (Array.isArray(deletedChapterIds)) {
+      deletedChapterIds.forEach(({ storyId, chapterId }: any) => {
+        if (storyId && chapterId) deleteChapter(storyId, chapterId);
+      });
+    }
+    res.json({ success: true, timestamp: Date.now() });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Sync failed' });
+  }
+});
+
 // Active readers endpoint
 app.get('/api/active-readers', (req: Request, res: Response) => {
   res.json({ count: Math.max(1, sseClients.length) });
