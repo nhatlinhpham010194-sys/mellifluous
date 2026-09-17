@@ -162,7 +162,7 @@ export const HomeOtherSection: React.FC<HomeOtherSectionProps> = ({ onGoToOtherP
                   {currentTrack.title}
                 </p>
                 <p className="text-[10px] text-stone-500 dark:text-stone-400 truncate">
-                  {currentTrack.artist} • {currentTrack.album}
+                  {currentTrack.artist} • {currentTrack.mood || 'Thư giãn'}
                 </p>
               </div>
 

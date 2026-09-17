@@ -35,7 +35,6 @@ export const BackgroundMusicBar: React.FC<BackgroundMusicBarProps> = ({ onOpenAu
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(210);
   const [sourceType, setSourceType] = useState<AudioSourceType>('synth');
-  const [embedUrl, setEmbedUrl] = useState<string | undefined>(undefined);
   const [isExpanded, setIsExpanded] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [prevVolume, setPrevVolume] = useState(0.4);
@@ -49,7 +48,6 @@ export const BackgroundMusicBar: React.FC<BackgroundMusicBarProps> = ({ onOpenAu
       setVolume(state.volume);
       setDuration(state.duration || 210);
       setSourceType(state.sourceType);
-      setEmbedUrl(state.embedUrl);
       if (state.tracks) {
         setTracks(state.tracks);
       }
@@ -120,18 +118,6 @@ export const BackgroundMusicBar: React.FC<BackgroundMusicBarProps> = ({ onOpenAu
       id="bgm-player-widget"
       className="fixed bottom-4 sm:bottom-6 left-3 sm:left-6 z-40 transition-all duration-300 select-none"
     >
-      {/* Hidden background iframe for SoundCloud / YouTube / Google Drive streaming */}
-      {isPlaying && embedUrl && (sourceType === 'soundcloud' || sourceType === 'youtube' || sourceType === 'gdrive') && (
-        <div className="absolute -top-10 -left-10 w-1 h-1 overflow-hidden opacity-0 pointer-events-none" aria-hidden="true">
-          <iframe
-            src={embedUrl}
-            title="External Music Stream"
-            allow="autoplay; encrypted-media"
-            className="w-10 h-10 border-0"
-          />
-        </div>
-      )}
-
       {/* Expanded Track Selection & Controls Panel */}
       {isExpanded && (
         <div className="mb-2 p-4 rounded-3xl bg-white/95 dark:bg-stone-900/95 backdrop-blur-md border border-pink-200/90 dark:border-stone-700 shadow-2xl w-80 sm:w-88 animate-in fade-in slide-in-from-bottom-2 space-y-3.5">

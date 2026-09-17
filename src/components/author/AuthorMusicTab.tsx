@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Music,
   Plus,
@@ -6,22 +6,26 @@ import {
   Play,
   Pause,
   RotateCcw,
-  CheckCircle2,
-  AlertCircle,
-  Link,
+  Upload,
+  Link as LinkIcon,
   Edit2,
   Save,
   X,
   Volume2,
-  Radio,
-  ExternalLink,
-  Info,
+  VolumeX,
+  FileAudio,
+  CheckCircle2,
+  AlertCircle,
   Sparkles,
+  Info,
+  Loader2,
+  HardDrive,
+  SkipForward,
+  SkipBack,
 } from 'lucide-react';
 import {
   bgmEngine,
   AudioTrack,
-  DEFAULT_TRACK_LIST,
   formatSecondsToTime,
   AudioSourceType,
 } from '../../utils/audioPlayer';
@@ -37,12 +41,25 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [duration, setDuration] = useState<number>(210);
   const [sourceType, setSourceType] = useState<AudioSourceType>('synth');
+  const [volume, setVolume] = useState<number>(0.4);
+  const [isMuted, setIsMuted] = useState<boolean>(false);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
 
-  // Form states
+  // Mode: Upload file or Paste link
+  const [inputMode, setInputMode] = useState<'upload' | 'link'>('upload');
+
+  // File Upload states
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [fileDuration, setFileDuration] = useState<string>('03:30');
+  const [fileDurationSec, setFileDurationSec] = useState<number>(210);
+  const [isDragging, setIsDragging] = useState<boolean>(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Common Form states
   const [title, setTitle] = useState('');
-  const [artist, setArtist] = useState('');
+  const [artist, setArtist] = useState('Mellifluous');
+  const [mood, setMood] = useState('Thư giãn');
   const [audioUrl, setAudioUrl] = useState('');
-  const [mood, setMood] = useState('');
   const [durationInput, setDurationInput] = useState('03:30');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -65,6 +82,9 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
       setCurrentTrack(state.track);
       setDuration(state.duration || 210);
       setSourceType(state.sourceType);
+      setVolume(state.volume);
+      setIsMuted(state.isMuted);
+      setIsLoading(state.isLoading);
       if (!isSeeking) {
         setCurrentTime(state.currentTime);
       }
@@ -72,32 +92,156 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
     return unsubscribe;
   }, [isSeeking]);
 
-  const handleAddTrack = async (e: React.FormEvent) => {
+  // Handle local audio file selection
+  const handleFileChange = (file: File) => {
+    if (!file) return;
+
+    // Check mime or extension
+    const validExtensions = ['.mp3', '.m4a', '.wav', '.ogg', '.aac', '.flac', '.webm'];
+    const fileNameLower = file.name.toLowerCase();
+    const isValid = validExtensions.some((ext) => fileNameLower.endsWith(ext)) || file.type.startsWith('audio/');
+
+    if (!isValid) {
+      onFeedback('error', 'Vui lòng chọn file âm thanh hợp lệ (.mp3, .m4a, .wav, .ogg, .aac, .flac).');
+      return;
+    }
+
+    if (file.size > 50 * 1024 * 1024) {
+      onFeedback('error', 'Dung lượng file vượt quá giới hạn cho phép (Tối đa 50MB).');
+      return;
+    }
+
+    setSelectedFile(file);
+
+    // Auto-clean file title
+    const rawName = file.name.substring(0, file.name.lastIndexOf('.')) || file.name;
+    const cleanTitle = rawName
+      .replace(/[-_]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!title.trim() || title === 'Giai điệu mới') {
+      setTitle(cleanTitle);
+    }
+
+    // Measure exact audio duration
+    try {
+      const tempAudio = new Audio();
+      const objectUrl = URL.createObjectURL(file);
+      tempAudio.src = objectUrl;
+      tempAudio.addEventListener('loadedmetadata', () => {
+        if (!isNaN(tempAudio.duration) && tempAudio.duration > 0) {
+          const formatted = formatSecondsToTime(tempAudio.duration);
+          setFileDuration(formatted);
+          setFileDurationSec(tempAudio.duration);
+          setDurationInput(formatted);
+        }
+        URL.revokeObjectURL(objectUrl);
+      });
+      tempAudio.addEventListener('error', () => {
+        URL.revokeObjectURL(objectUrl);
+      });
+    } catch {
+      // Fallback
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = () => {
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      handleFileChange(e.dataTransfer.files[0]);
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+
     if (!title.trim()) {
-      onFeedback('error', 'Vui lòng nhập tên bài hát / tác phẩm.');
+      onFeedback('error', 'Vui lòng nhập tên bài hát.');
       return;
     }
 
     setIsSubmitting(true);
-    try {
-      await bgmEngine.addTrack({
-        title: title.trim(),
-        artist: artist.trim() || 'Mellifluous Chill',
-        audioUrl: audioUrl.trim() || undefined,
-        mood: mood.trim() || (audioUrl.trim() ? 'Nhạc phát trực tuyến' : 'Giai điệu thư giãn'),
-        duration: durationInput.trim() || '03:30',
-        addedBy: 'Tác giả / BQT',
-      });
 
-      onFeedback('success', `Đã thêm bài hát "${title.trim()}" vào playlist thành công!`);
-      setTitle('');
-      setArtist('');
-      setAudioUrl('');
-      setMood('');
-      setDurationInput('03:30');
-    } catch {
-      onFeedback('error', 'Không thể thêm bài hát. Vui lòng kiểm tra lại.');
+    try {
+      if (inputMode === 'upload') {
+        if (!selectedFile) {
+          onFeedback('error', 'Vui lòng chọn file âm thanh cần tải lên từ thiết bị.');
+          setIsSubmitting(false);
+          return;
+        }
+
+        const newTrack = await bgmEngine.addUploadedTrack({
+          file: selectedFile,
+          title: title.trim(),
+          artist: artist.trim() || 'Mellifluous',
+          mood: mood.trim() || 'File âm thanh đã tải lên',
+          duration: fileDuration || durationInput || '03:30',
+          addedBy: 'Tác giả',
+        });
+
+        onFeedback('success', `Đã tải lên và lưu bài hát "${newTrack.title}" thành công!`);
+
+        // Reset form
+        setSelectedFile(null);
+        setTitle('');
+        setArtist('Mellifluous');
+        setMood('Thư giãn');
+        if (fileInputRef.current) {
+          fileInputRef.current.value = '';
+        }
+
+        // Auto-play the newly uploaded track
+        const updatedTracks = bgmEngine.getTracks();
+        const newIndex = updatedTracks.findIndex((t) => t.id === newTrack.id);
+        if (newIndex !== -1) {
+          bgmEngine.play(newIndex);
+        }
+      } else {
+        // Link Mode
+        if (!audioUrl.trim()) {
+          onFeedback('error', 'Vui lòng nhập đường link phát nhạc trực tuyến.');
+          setIsSubmitting(false);
+          return;
+        }
+
+        const newTrack = await bgmEngine.addTrack({
+          title: title.trim(),
+          artist: artist.trim() || 'Mellifluous Chill',
+          audioUrl: audioUrl.trim(),
+          mood: mood.trim() || 'Nhạc phát trực tuyến',
+          duration: durationInput.trim() || '03:30',
+          addedBy: 'Tác giả',
+        });
+
+        onFeedback('success', `Đã thêm bài hát "${newTrack.title}" vào danh sách phát!`);
+
+        // Reset form
+        setTitle('');
+        setArtist('Mellifluous');
+        setAudioUrl('');
+        setMood('Thư giãn');
+        setDurationInput('03:30');
+
+        // Auto-play
+        const updatedTracks = bgmEngine.getTracks();
+        const newIndex = updatedTracks.findIndex((t) => t.id === newTrack.id);
+        if (newIndex !== -1) {
+          bgmEngine.play(newIndex);
+        }
+      }
+    } catch (err: any) {
+      console.error('Error adding track:', err);
+      onFeedback('error', `Lỗi khi lưu bài hát: ${err.message || 'Không xác định'}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -152,7 +296,7 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
   const handleResetTracks = async () => {
     try {
       await bgmEngine.resetToDefaultTracks();
-      onFeedback('success', 'Đã khôi phục danh sách nhạc nền mặc định.');
+      onFeedback('success', 'Đã khôi phục danh sách nhạc nền mặc định ban đầu.');
     } catch {
       onFeedback('error', 'Không thể đặt lại danh sách nhạc.');
     }
@@ -182,24 +326,67 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
     bgmEngine.seek(val);
   };
 
+  const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = parseFloat(e.target.value);
+    bgmEngine.setVolume(val);
+  };
+
+  const handleToggleMute = () => {
+    bgmEngine.toggleMute();
+  };
+
+  const getSourceBadge = (t: AudioTrack) => {
+    const u = (t.audioUrl || '').toLowerCase();
+    if (t.sourceType === 'uploaded' || u.startsWith('/api/audio') || u.startsWith('blob:')) {
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 text-[10px] font-medium border border-emerald-200/80 dark:border-emerald-800">
+          <HardDrive className="w-3 h-3" />
+          <span>File tải lên</span>
+        </span>
+      );
+    }
+    if (u.includes('drive.google.com')) {
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-300 text-[10px] font-medium border border-sky-200/80 dark:border-sky-800">
+          <CloudIcon className="w-3 h-3" />
+          <span>Google Drive</span>
+        </span>
+      );
+    }
+    if (t.audioUrl) {
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-pink-50 dark:bg-pink-950/60 text-pink-700 dark:text-pink-300 text-[10px] font-medium border border-pink-200/80 dark:border-pink-800">
+          <LinkIcon className="w-3 h-3" />
+          <span>Link trực tuyến</span>
+        </span>
+      );
+    }
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 text-[10px] font-medium border border-amber-200/80 dark:border-amber-800">
+        <Sparkles className="w-3 h-3" />
+        <span>Giai điệu lofi</span>
+      </span>
+    );
+  };
+
   return (
     <div id="author-music-management-tab" className="space-y-6 animate-in fade-in duration-200">
       {/* Top Banner Card */}
       <div className="p-5 sm:p-6 rounded-2xl bg-gradient-to-r from-pink-50 via-rose-50/80 to-amber-50/80 dark:from-stone-800 dark:via-stone-850 dark:to-stone-800 border border-pink-200/90 dark:border-stone-700 shadow-2xs">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-pink-500/10 dark:bg-pink-950/60 text-pink-600 dark:text-pink-400 flex items-center justify-center shrink-0">
-              <Music className="w-5 h-5" />
+          <div className="flex items-center gap-3.5">
+            <div className="w-11 h-11 rounded-2xl bg-pink-500/15 dark:bg-pink-950/60 text-pink-600 dark:text-pink-400 flex items-center justify-center shrink-0 shadow-2xs">
+              <Music className="w-6 h-6" />
             </div>
             <div>
               <h3 className="font-serif text-base sm:text-lg font-bold text-stone-900 dark:text-stone-100 flex items-center gap-2">
-                <span>Quản Lý Playlist Nhạc Nền Đọc Truyện</span>
-                <span className="text-xs px-2 py-0.5 rounded-full bg-pink-100 text-pink-800 dark:bg-pink-950/80 dark:text-pink-300 font-sans font-medium">
+                <span>Quản Lý & Tải Lên Nhạc Nền Đọc Truyện</span>
+                <span className="text-xs px-2.5 py-0.5 rounded-full bg-pink-100 text-pink-800 dark:bg-pink-950/80 dark:text-pink-300 font-sans font-medium">
                   {tracks.length} bài hát
                 </span>
               </h3>
               <p className="text-xs text-stone-600 dark:text-stone-300 font-sans mt-0.5">
-                Tác giả có thể thêm link nhạc từ SoundCloud, Google Drive, YouTube, MP3 trực tiếp hoặc sử dụng giai điệu piano lofi có sẵn.
+                Tất cả bài hát được phát bằng một trình phát âm thanh duy nhất, hỗ trợ tải file trực tiếp, Google Drive và nghe mượt mà không bị gián đoạn.
               </p>
             </div>
           </div>
@@ -207,52 +394,89 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
           <button
             type="button"
             onClick={handleResetTracks}
-            className="self-start sm:self-center px-3 py-1.5 rounded-xl border border-stone-300 dark:border-stone-600 bg-white dark:bg-stone-800 hover:bg-stone-50 dark:hover:bg-stone-700 text-stone-800 dark:text-stone-100 text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-2xs cursor-pointer shrink-0"
-            title="Khôi phục danh sách nhạc chuẩn ban đầu"
+            className="self-start sm:self-center px-3.5 py-2 rounded-xl border border-stone-300 dark:border-stone-600 bg-white dark:bg-stone-800 hover:bg-stone-50 dark:hover:bg-stone-700 text-stone-800 dark:text-stone-100 text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-2xs cursor-pointer shrink-0"
+            title="Khôi phục danh sách 4 giai điệu piano mặc định"
           >
-            <RotateCcw className="w-3.5 h-3.5" />
-            <span>Mặc định ban đầu</span>
+            <RotateCcw className="w-3.5 h-3.5 text-stone-500" />
+            <span>Giai điệu ban đầu</span>
           </button>
         </div>
       </div>
 
-      {/* Live Preview Player with Seek & Progress Bar */}
-      <div className="p-4 sm:p-5 rounded-2xl bg-white dark:bg-stone-850 border border-stone-200 dark:border-stone-700 shadow-2xs space-y-3">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-stone-100 dark:border-stone-700 pb-3">
+      {/* Unified Master Audio Player Bar */}
+      <div className="p-4 sm:p-5 rounded-2xl bg-white dark:bg-stone-850 border border-pink-200/90 dark:border-stone-700 shadow-sm space-y-3.5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-stone-100 dark:border-stone-750 pb-3">
           <div className="flex items-center gap-3">
             <button
               type="button"
               onClick={handleTogglePlay}
-              className={`w-10 h-10 rounded-full flex items-center justify-center transition-all cursor-pointer shadow-xs shrink-0 ${
+              className={`w-11 h-11 rounded-2xl flex items-center justify-center transition-all cursor-pointer shadow-xs shrink-0 ${
                 isPlaying
                   ? 'bg-gradient-to-tr from-pink-500 to-rose-500 text-white animate-pulse'
                   : 'bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-200 hover:bg-pink-100 dark:hover:bg-stone-700'
               }`}
+              title={isPlaying ? 'Tạm dừng bài hát' : 'Phát bài hát'}
             >
-              {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5 ml-0.5" />}
+              {isLoading ? (
+                <Loader2 className="w-5 h-5 animate-spin" />
+              ) : isPlaying ? (
+                <Pause className="w-5 h-5" />
+              ) : (
+                <Play className="w-5 h-5 ml-0.5" />
+              )}
             </button>
+
             <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-bold text-stone-900 dark:text-stone-100 truncate">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-sm font-serif font-bold text-stone-900 dark:text-stone-100 truncate">
                   {currentTrack.title}
                 </span>
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-pink-50 dark:bg-pink-950/60 text-pink-700 dark:text-pink-300 font-mono font-medium uppercase">
-                  {sourceType}
-                </span>
+                {getSourceBadge(currentTrack)}
               </div>
-              <p className="text-[11px] text-stone-500 dark:text-stone-400 truncate">
+              <p className="text-xs text-stone-500 dark:text-stone-400 truncate mt-0.5">
                 {currentTrack.artist} • {currentTrack.mood || 'Thư giãn'}
               </p>
             </div>
           </div>
 
-          <div className="text-xs font-mono text-stone-600 dark:text-stone-300 font-medium self-end sm:self-center">
-            {formatSecondsToTime(isSeeking ? seekValue : currentTime)} / {formatSecondsToTime(duration)}
+          {/* Quick Player Volume & Time Controls */}
+          <div className="flex items-center gap-3 self-end sm:self-center shrink-0">
+            <div className="flex items-center gap-1.5 bg-stone-50 dark:bg-stone-900 px-3 py-1.5 rounded-xl border border-stone-200 dark:border-stone-700">
+              <button
+                type="button"
+                onClick={handleToggleMute}
+                className="text-stone-500 hover:text-pink-600 dark:text-stone-400 cursor-pointer p-0.5"
+                title={isMuted ? 'Bật âm lượng' : 'Tắt tiếng'}
+              >
+                {isMuted || volume === 0 ? (
+                  <VolumeX className="w-4 h-4 text-rose-500" />
+                ) : (
+                  <Volume2 className="w-4 h-4" />
+                )}
+              </button>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.05"
+                value={isMuted ? 0 : volume}
+                onChange={handleVolumeChange}
+                className="w-16 sm:w-20 h-1.5 bg-stone-200 dark:bg-stone-700 rounded-lg appearance-none cursor-pointer accent-pink-500"
+                title={`Âm lượng: ${Math.round(volume * 100)}%`}
+              />
+              <span className="text-[10px] font-mono text-stone-500 dark:text-stone-400 w-7 text-right">
+                {isMuted ? '0%' : `${Math.round(volume * 100)}%`}
+              </span>
+            </div>
+
+            <div className="text-xs font-mono text-stone-600 dark:text-stone-300 font-medium px-2 py-1 bg-stone-50 dark:bg-stone-900 rounded-xl border border-stone-200 dark:border-stone-700">
+              {formatSecondsToTime(isSeeking ? seekValue : currentTime)} / {formatSecondsToTime(duration)}
+            </div>
           </div>
         </div>
 
-        {/* Live Progress / Seek Bar */}
-        <div className="space-y-1 pt-1">
+        {/* Live Seek Slider */}
+        <div className="space-y-1">
           <input
             type="range"
             min="0"
@@ -264,8 +488,9 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
             onChange={handleSeekChange}
             onMouseUp={handleSeekEnd}
             onTouchEnd={handleSeekEnd}
-            className="w-full h-2 bg-stone-200 dark:bg-stone-700 rounded-lg appearance-none cursor-pointer accent-pink-500 focus:outline-hidden"
-            title="Kéo để tua nhanh hoặc quay lại đoạn nhạc"
+            className="w-full h-2 bg-stone-100 dark:bg-stone-750 rounded-lg appearance-none cursor-pointer accent-pink-500 focus:outline-hidden"
+            title="Kéo thanh này để tua nhạc đến bất kỳ giây nào"
+            aria-label="Tua tiến độ bài hát"
           />
           <div className="flex justify-between text-[10px] text-stone-400 font-mono">
             <span>{formatSecondsToTime(isSeeking ? seekValue : currentTime)}</span>
@@ -274,37 +499,131 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
         </div>
       </div>
 
-      {/* Format Support Guide */}
-      <div className="p-4 rounded-2xl bg-amber-50/70 dark:bg-stone-800/60 border border-amber-200/80 dark:border-stone-700 text-xs text-stone-700 dark:text-stone-300 space-y-2">
-        <div className="flex items-center gap-1.5 font-bold text-amber-800 dark:text-amber-300">
-          <Info className="w-4 h-4 text-amber-600 dark:text-amber-400" />
-          <span>Hướng dẫn gắn link nhạc đa nền tảng cho Tác giả:</span>
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] leading-relaxed text-stone-600 dark:text-stone-300">
-          <div className="p-2 rounded-xl bg-white/70 dark:bg-stone-850/80 border border-stone-200 dark:border-stone-700">
-            <strong>☁️ SoundCloud:</strong> Dán link bài hát SoundCloud (VD: <code className="text-pink-600 font-mono">soundcloud.com/nghesi/baihat</code>). Hệ thống sẽ tự động chuyển sang SoundCloud Player chính chủ.
+      {/* Add Music Section: Upload File vs Online Link Tabs */}
+      <div className="p-5 sm:p-6 rounded-2xl bg-white dark:bg-stone-850 border border-stone-200 dark:border-stone-700 shadow-2xs space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-stone-100 dark:border-stone-750 pb-3">
+          <div className="flex items-center gap-2">
+            <Plus className="w-4 h-4 text-pink-500" />
+            <span className="text-xs sm:text-sm font-bold text-stone-900 dark:text-stone-100 uppercase tracking-wider">
+              Thêm bản nhạc mới vào playlist:
+            </span>
           </div>
-          <div className="p-2 rounded-xl bg-white/70 dark:bg-stone-850/80 border border-stone-200 dark:border-stone-700">
-            <strong>📁 Google Drive:</strong> Mở quyền chia sẻ file audio ("Bất kỳ ai có đường link") và dán link (VD: <code className="text-pink-600 font-mono">drive.google.com/file/d/.../view</code>). Hệ thống sẽ tự động stream trực tiếp!
-          </div>
-          <div className="p-2 rounded-xl bg-white/70 dark:bg-stone-850/80 border border-stone-200 dark:border-stone-700">
-            <strong>▶️ YouTube:</strong> Dán link video YouTube (VD: <code className="text-pink-600 font-mono">youtube.com/watch?v=...</code> hoặc <code className="text-pink-600 font-mono">youtu.be/...</code>) để phát nhạc nền.
-          </div>
-          <div className="p-2 rounded-xl bg-white/70 dark:bg-stone-850/80 border border-stone-200 dark:border-stone-700">
-            <strong>🎵 File MP3 / Dropbox:</strong> Dán link direct file kết thúc bằng <code className="text-pink-600 font-mono">.mp3</code>, <code className="text-pink-600 font-mono">.m4a</code>, hoặc link Dropbox chia sẻ.
-          </div>
-        </div>
-      </div>
 
-      {/* Add New Track Form */}
-      <div className="p-5 rounded-2xl bg-white dark:bg-stone-850 border border-stone-200 dark:border-stone-700 shadow-2xs space-y-4">
-        <h4 className="text-xs font-bold text-stone-900 dark:text-stone-100 uppercase tracking-wider flex items-center gap-1.5">
-          <Plus className="w-4 h-4 text-pink-500" />
-          <span>Thêm bài hát mới vào danh sách phát:</span>
-        </h4>
+          {/* Input Mode Selector */}
+          <div className="flex items-center p-1 rounded-xl bg-stone-100 dark:bg-stone-900 border border-stone-200 dark:border-stone-800">
+            <button
+              type="button"
+              onClick={() => setInputMode('upload')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                inputMode === 'upload'
+                  ? 'bg-white dark:bg-stone-800 text-pink-600 dark:text-pink-400 shadow-xs'
+                  : 'text-stone-600 dark:text-stone-400 hover:text-stone-900'
+              }`}
+            >
+              <Upload className="w-3.5 h-3.5" />
+              <span>Tải file từ máy (Khuyên dùng)</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setInputMode('link')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                inputMode === 'link'
+                  ? 'bg-white dark:bg-stone-800 text-pink-600 dark:text-pink-400 shadow-xs'
+                  : 'text-stone-600 dark:text-stone-400 hover:text-stone-900'
+              }`}
+            >
+              <LinkIcon className="w-3.5 h-3.5" />
+              <span>Dán đường link</span>
+            </button>
+          </div>
+        </div>
 
-        <form onSubmit={handleAddTrack} className="space-y-3">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {/* UPLOAD FILE TAB */}
+          {inputMode === 'upload' ? (
+            <div className="space-y-3">
+              {/* Drag & Drop Area */}
+              <div
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+                onClick={() => fileInputRef.current?.click()}
+                className={`p-6 sm:p-8 rounded-2xl border-2 border-dashed text-center cursor-pointer transition-all ${
+                  isDragging
+                    ? 'border-pink-500 bg-pink-50/70 dark:bg-pink-950/30'
+                    : selectedFile
+                    ? 'border-emerald-300 dark:border-emerald-700 bg-emerald-50/40 dark:bg-stone-900'
+                    : 'border-stone-300 dark:border-stone-700 hover:border-pink-400 hover:bg-stone-50/80 dark:hover:bg-stone-900/60'
+                }`}
+              >
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="audio/*,.mp3,.m4a,.wav,.ogg,.aac,.flac"
+                  className="hidden"
+                  onChange={(e) => {
+                    if (e.target.files && e.target.files[0]) {
+                      handleFileChange(e.target.files[0]);
+                    }
+                  }}
+                />
+
+                {selectedFile ? (
+                  <div className="flex flex-col sm:flex-row items-center justify-center gap-3 text-stone-800 dark:text-stone-200">
+                    <div className="w-12 h-12 rounded-2xl bg-emerald-100 dark:bg-emerald-950 text-emerald-600 flex items-center justify-center shrink-0">
+                      <FileAudio className="w-6 h-6" />
+                    </div>
+                    <div className="text-left min-w-0">
+                      <p className="font-semibold text-sm truncate text-emerald-800 dark:text-emerald-300">
+                        {selectedFile.name}
+                      </p>
+                      <p className="text-xs text-stone-500 dark:text-stone-400 font-mono mt-0.5">
+                        Dung lượng: {(selectedFile.size / (1024 * 1024)).toFixed(2)} MB • Thời lượng ước tính: {fileDuration}
+                      </p>
+                    </div>
+                    <span className="text-xs px-2.5 py-1 rounded-lg bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 text-stone-600 dark:text-stone-300 hover:text-pink-600">
+                      Bấm để đổi file khác
+                    </span>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="w-12 h-12 mx-auto rounded-2xl bg-pink-100 dark:bg-pink-950/60 text-pink-600 dark:text-pink-400 flex items-center justify-center">
+                      <Upload className="w-6 h-6" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-stone-800 dark:text-stone-200">
+                        Kéo thả file âm thanh vào đây, hoặc click để duyệt file từ máy tính/điện thoại
+                      </p>
+                      <p className="text-xs text-stone-500 dark:text-stone-400 mt-1 font-sans">
+                        Hỗ trợ định dạng: <span className="font-mono text-pink-600">.mp3, .m4a, .wav, .ogg, .aac, .flac</span> (Tối đa 50MB)
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            /* LINK TAB */
+            <div className="space-y-2">
+              <label className="text-[11px] font-semibold text-stone-800 dark:text-stone-200 flex items-center gap-1.5">
+                <LinkIcon className="w-3.5 h-3.5 text-pink-500" />
+                <span>Nhập link phát nhạc trực tuyến:</span>
+              </label>
+              <input
+                type="url"
+                value={audioUrl}
+                onChange={(e) => setAudioUrl(e.target.value)}
+                placeholder="Dán link Google Drive chia sẻ công khai, file direct .mp3, Dropbox, v.v..."
+                className="w-full px-3.5 py-2.5 rounded-xl bg-stone-50 dark:bg-stone-900 border border-stone-300 dark:border-stone-600 text-stone-900 dark:text-stone-100 text-xs sm:text-sm font-mono focus:ring-2 focus:ring-pink-400 focus:outline-hidden"
+              />
+              <p className="text-[11px] text-stone-500 dark:text-stone-400">
+                💡 <span className="font-medium">Link Google Drive</span>: Mở quyền truy cập "Bất kỳ ai có đường link đều có thể xem" rồi dán vào đây. Hệ thống tự động chuyển tiếp và phát mượt mà qua trình phát thống nhất.
+              </p>
+            </div>
+          )}
+
+          {/* Common Metadata Fields */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
             <div className="space-y-1">
               <label className="text-[11px] font-semibold text-stone-800 dark:text-stone-200">
                 Tên bài hát / Giai điệu <span className="text-rose-500">*</span>
@@ -314,7 +633,7 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
                 required
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                placeholder="VD: Sứ Thanh Hoa (Châu Kiệt Luân)"
+                placeholder="VD: Gió Thổi Mùa Hạ"
                 className="w-full px-3.5 py-2.5 rounded-xl bg-stone-50 dark:bg-stone-900 border border-stone-300 dark:border-stone-600 text-stone-900 dark:text-stone-100 text-xs sm:text-sm focus:ring-2 focus:ring-pink-400 focus:outline-hidden"
               />
             </div>
@@ -331,20 +650,6 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
                 className="w-full px-3.5 py-2.5 rounded-xl bg-stone-50 dark:bg-stone-900 border border-stone-300 dark:border-stone-600 text-stone-900 dark:text-stone-100 text-xs sm:text-sm focus:ring-2 focus:ring-pink-400 focus:outline-hidden"
               />
             </div>
-          </div>
-
-          <div className="space-y-1">
-            <label className="text-[11px] font-semibold text-stone-800 dark:text-stone-200 flex items-center gap-1">
-              <Link className="w-3.5 h-3.5 text-pink-500" />
-              <span>Link phát nhạc trực tuyến (SoundCloud, Google Drive, YouTube, MP3 URL...):</span>
-            </label>
-            <input
-              type="url"
-              value={audioUrl}
-              onChange={(e) => setAudioUrl(e.target.value)}
-              placeholder="Dán link SoundCloud, Google Drive hoặc link file .mp3 (để trống nếu muốn dùng giai điệu piano lofi có sẵn)"
-              className="w-full px-3.5 py-2.5 rounded-xl bg-stone-50 dark:bg-stone-900 border border-stone-300 dark:border-stone-600 text-stone-900 dark:text-stone-100 text-xs sm:text-sm font-mono focus:ring-2 focus:ring-pink-400 focus:outline-hidden"
-            />
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -375,35 +680,46 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
             </div>
           </div>
 
+          {/* Submit Button */}
           <div className="flex justify-end pt-2">
             <button
               type="submit"
-              disabled={isSubmitting || !title.trim()}
-              className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-pink-500 to-rose-500 hover:from-pink-600 hover:to-rose-600 text-white text-xs sm:text-sm font-semibold shadow-xs flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50"
+              disabled={isSubmitting || !title.trim() || (inputMode === 'upload' && !selectedFile)}
+              className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-pink-500 to-rose-500 hover:from-pink-600 hover:to-rose-600 text-white text-xs sm:text-sm font-semibold shadow-xs flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50"
             >
-              <Plus className="w-4 h-4" />
-              <span>{isSubmitting ? 'Đang thêm...' : 'Thêm vào danh sách phát'}</span>
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Đang tải lên & lưu bài hát...</span>
+                </>
+              ) : (
+                <>
+                  <Plus className="w-4 h-4" />
+                  <span>Thêm vào danh sách phát</span>
+                </>
+              )}
             </button>
           </div>
         </form>
       </div>
 
-      {/* Playlist List */}
-      <div className="p-5 rounded-2xl bg-white dark:bg-stone-850 border border-stone-200 dark:border-stone-700 shadow-2xs space-y-3">
-        <div className="flex items-center justify-between border-b border-stone-100 dark:border-stone-700 pb-3">
-          <span className="text-xs font-bold text-stone-900 dark:text-stone-100 uppercase tracking-wider flex items-center gap-1.5">
-            <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+      {/* Playlist List with Play / Pause / Seek / Edit / Delete */}
+      <div className="p-5 sm:p-6 rounded-2xl bg-white dark:bg-stone-850 border border-stone-200 dark:border-stone-700 shadow-2xs space-y-3">
+        <div className="flex items-center justify-between border-b border-stone-100 dark:border-stone-750 pb-3">
+          <span className="text-xs sm:text-sm font-bold text-stone-900 dark:text-stone-100 uppercase tracking-wider flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-amber-500" />
             <span>Danh sách phát hiện hành ({tracks.length})</span>
           </span>
           <span className="text-[11px] text-stone-500 dark:text-stone-400">
-            Bấm nút phát để nghe thử
+            Tất cả bài hát dùng chung 1 player duy nhất
           </span>
         </div>
 
-        <div className="space-y-2">
+        <div className="space-y-2.5">
           {tracks.map((t, idx) => {
             const isEditing = editingTrackId === t.id;
             const isCurrentPlaying = currentTrack.id === t.id && isPlaying;
+            const isCurrent = currentTrack.id === t.id;
 
             if (isEditing) {
               return (
@@ -431,7 +747,7 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
                     type="url"
                     value={editAudioUrl}
                     onChange={(e) => setEditAudioUrl(e.target.value)}
-                    placeholder="Link bài hát (SoundCloud / Drive / YouTube / MP3)"
+                    placeholder="Link bài hát (Google Drive / Direct MP3 / Để trống nếu dùng lofi)"
                     className="w-full px-3 py-1.5 rounded-lg border border-stone-300 dark:border-stone-600 bg-white dark:bg-stone-800 text-xs font-mono"
                   />
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -450,20 +766,20 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
                       className="px-3 py-1.5 rounded-lg border border-stone-300 dark:border-stone-600 bg-white dark:bg-stone-800 text-xs font-mono"
                     />
                   </div>
-                  <div className="flex justify-end gap-2 pt-1">
+                  <div className="flex items-center justify-end gap-2">
                     <button
                       type="button"
                       onClick={() => setEditingTrackId(null)}
-                      className="px-3 py-1 rounded-lg border border-stone-300 text-stone-600 dark:text-stone-300 text-xs cursor-pointer"
+                      className="px-3 py-1 rounded-lg border border-stone-300 text-stone-600 text-xs cursor-pointer"
                     >
                       Hủy
                     </button>
                     <button
                       type="button"
                       onClick={() => handleSaveEdit(t.id)}
-                      className="px-3 py-1 rounded-lg bg-pink-500 hover:bg-pink-600 text-white text-xs font-semibold flex items-center gap-1 cursor-pointer"
+                      className="px-3.5 py-1 rounded-lg bg-pink-600 text-white text-xs font-semibold flex items-center gap-1 cursor-pointer"
                     >
-                      <Save className="w-3.5 h-3.5" />
+                      <Save className="w-3 h-3" />
                       <span>Lưu thay đổi</span>
                     </button>
                   </div>
@@ -474,71 +790,68 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
             return (
               <div
                 key={t.id}
-                className={`p-3 rounded-xl border flex items-center justify-between gap-3 transition-all ${
-                  isCurrentPlaying
-                    ? 'border-pink-300 bg-pink-50/60 dark:bg-pink-950/40 dark:border-pink-800 shadow-2xs'
-                    : 'border-stone-200 dark:border-stone-700 bg-stone-50/50 dark:bg-stone-900/50 hover:bg-stone-100/70 dark:hover:bg-stone-800'
+                className={`p-3 sm:p-3.5 rounded-xl border transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                  isCurrent
+                    ? 'border-pink-300 dark:border-pink-800 bg-pink-50/50 dark:bg-pink-950/20'
+                    : 'border-stone-200 dark:border-stone-700 hover:border-stone-300 dark:hover:border-stone-600 bg-stone-50/50 dark:bg-stone-900/50'
                 }`}
               >
                 <div className="flex items-center gap-3 min-w-0">
                   <button
                     type="button"
                     onClick={() => {
-                      if (currentTrack.id === t.id && isPlaying) {
+                      if (isCurrent) {
                         handleTogglePlay();
                       } else {
                         handlePlayTrack(idx);
                       }
                     }}
-                    className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 cursor-pointer transition-all ${
+                    className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all cursor-pointer shrink-0 ${
                       isCurrentPlaying
-                        ? 'bg-pink-500 text-white shadow-xs animate-pulse'
-                        : 'bg-stone-200 dark:bg-stone-700 text-stone-700 dark:text-stone-200 hover:bg-pink-100'
+                        ? 'bg-pink-500 text-white shadow-xs'
+                        : 'bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 text-stone-700 dark:text-stone-300 hover:bg-pink-50 hover:text-pink-600'
                     }`}
-                    title={isCurrentPlaying ? 'Tạm dừng' : 'Nghe thử bài này'}
+                    title={isCurrentPlaying ? 'Tạm dừng' : 'Phát bài này'}
                   >
-                    {isCurrentPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5 ml-0.5" />}
+                    {isCurrentPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
                   </button>
 
                   <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <p className="font-semibold text-xs text-stone-900 dark:text-stone-100 truncate">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="font-semibold text-xs sm:text-sm text-stone-900 dark:text-stone-100 truncate">
                         {t.title}
                       </p>
-                      {t.audioUrl && (
-                        <span className="px-1.5 py-0.2 rounded-sm bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 text-[9px] font-mono">
-                          Link online
-                        </span>
-                      )}
+                      {getSourceBadge(t)}
                     </div>
-                    <p className="text-[11px] text-stone-500 dark:text-stone-400 truncate">
-                      {t.artist} • {t.mood || 'Thư giãn'}
+                    <p className="text-[11px] text-stone-500 dark:text-stone-400 truncate mt-0.5">
+                      {t.artist} • {t.mood || 'Thư giãn'} {t.fileSize ? `(${t.fileSize})` : ''}
                     </p>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2 shrink-0">
-                  <span className="text-[10px] font-mono text-stone-400">
+                <div className="flex items-center justify-between sm:justify-end gap-3 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-stone-200/60 dark:border-stone-700/60">
+                  <span className="text-xs font-mono text-stone-500 dark:text-stone-400">
                     {t.duration || '03:30'}
                   </span>
 
-                  <button
-                    type="button"
-                    onClick={() => handleStartEdit(t)}
-                    className="p-1.5 rounded-lg text-stone-400 hover:text-stone-700 dark:hover:text-stone-200 hover:bg-stone-200 dark:hover:bg-stone-700 cursor-pointer"
-                    title="Chỉnh sửa bài hát"
-                  >
-                    <Edit2 className="w-3.5 h-3.5" />
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => handleRemoveTrack(t.id, t.title)}
-                    className="p-1.5 rounded-lg text-stone-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/60 cursor-pointer"
-                    title="Xóa bài hát"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => handleStartEdit(t)}
+                      className="p-1.5 rounded-lg text-stone-500 hover:text-pink-600 hover:bg-white dark:hover:bg-stone-800 cursor-pointer transition-colors"
+                      title="Chỉnh sửa thông tin bài hát"
+                    >
+                      <Edit2 className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveTrack(t.id, t.title)}
+                      className="p-1.5 rounded-lg text-stone-400 hover:text-rose-600 hover:bg-white dark:hover:bg-stone-800 cursor-pointer transition-colors"
+                      title="Xóa bài hát khỏi playlist"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </div>
               </div>
             );
@@ -548,3 +861,19 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
     </div>
   );
 };
+
+function CloudIcon(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      {...props}
+    >
+      <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z" />
+    </svg>
+  );
+}

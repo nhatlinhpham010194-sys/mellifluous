@@ -1,7 +1,13 @@
-// Ambient Background Music Engine using Web Audio API + HTMLAudioElement + Iframe Audio Widget
-// Supports direct MP3/M4A/WAV, SoundCloud, Google Drive, YouTube, and gentle built-in Lofi Synth.
+// Unified Audio Engine for Mellifluous
+// Uses ONE SINGLE HTMLAudioElement instance for all playback across the entire app.
+// Seamlessly plays:
+// 1. User uploaded audio files (saved on server + cached in IndexedDB)
+// 2. Direct online audio files (.mp3, .m4a, .wav, .ogg, .flac)
+// 3. Google Drive / Dropbox audio (streamed & proxied via /api/proxy-audio with HTTP 206 Range support)
+// 4. Built-in sweet lofi piano melodies (synthesized into seamless WAV Audio Blobs)
 
 import { db, doc, setDoc, deleteDoc, onSnapshot, collection } from '../lib/firebase';
+import { saveAudioBlobToIDB, getAudioBlobFromIDB, deleteAudioBlobFromIDB } from './audioIndexedDB';
 
 export interface AudioTrack {
   id: string;
@@ -9,97 +15,64 @@ export interface AudioTrack {
   artist: string;
   duration?: string;
   mood?: string;
-  audioUrl?: string; // Direct audio URL, SoundCloud, Google Drive, YouTube, Dropbox, etc.
+  audioUrl?: string; // Direct /api/audio/... URL, online link, or empty for built-in melody
+  sourceType?: 'uploaded' | 'direct' | 'gdrive' | 'synth';
+  fileSize?: string;
   addedBy?: string;
   createdAt?: string;
 }
 
-export type AudioSourceType = 'synth' | 'direct' | 'soundcloud' | 'gdrive' | 'youtube';
-
-export interface ResolvedAudioSource {
-  sourceType: AudioSourceType;
-  streamUrl?: string;
-  embedUrl?: string;
-  parsedDuration?: number;
-}
+export type AudioSourceType = 'uploaded' | 'direct' | 'gdrive' | 'synth';
 
 export interface AudioPlaybackState {
   isPlaying: boolean;
   track: AudioTrack;
-  volume: number;
+  volume: number; // 0 to 1
   tracks: AudioTrack[];
   currentTime: number; // in seconds
   duration: number; // in seconds
   sourceType: AudioSourceType;
-  embedUrl?: string;
   isMuted: boolean;
+  isLoading: boolean;
   error?: string | null;
 }
 
-/**
- * Universal audio URL resolver that converts Google Drive, SoundCloud,
- * YouTube, Dropbox, OneDrive sharing links into playable formats.
- */
-export function resolveAudioSource(rawUrl?: string, fallbackDuration = '03:30'): ResolvedAudioSource {
-  const parsedDuration = parseDurationToSeconds(fallbackDuration);
+export const DEFAULT_TRACK_LIST: AudioTrack[] = [
+  {
+    id: 'track-1',
+    title: 'Gió Thổi Mùa Hạ (夏天的风)',
+    artist: 'Mellifluous Lofi Chill',
+    duration: '03:45',
+    mood: 'Rhodes Piano & Gió mùa hạ',
+    sourceType: 'synth',
+  },
+  {
+    id: 'track-2',
+    title: 'Mùa Hè Năm Ấy (那年夏天)',
+    artist: 'Acoustic Piano & Music Box',
+    duration: '04:12',
+    mood: 'Tiếng đàn êm dịu tuổi thanh xuân',
+    sourceType: 'synth',
+  },
+  {
+    id: 'track-3',
+    title: 'Tớ Thích Cậu (我喜欢你)',
+    artist: 'Sweet Warm Chords',
+    duration: '03:30',
+    mood: 'Giai điệu ngọt ngào chữa lành',
+    sourceType: 'synth',
+  },
+  {
+    id: 'track-4',
+    title: 'Ký Ức Mùa Mưa Rào',
+    artist: 'Ambient Rain & Chimes',
+    duration: '02:58',
+    mood: 'Chuông gió & giọt mưa tí tách',
+    sourceType: 'synth',
+  },
+];
 
-  if (!rawUrl || !rawUrl.trim()) {
-    return { sourceType: 'synth', parsedDuration };
-  }
-
-  const url = rawUrl.trim();
-
-  // 1. SoundCloud links
-  if (url.includes('soundcloud.com')) {
-    // If it is already a direct audio cdn stream
-    if (url.includes('sndcdn.com') || url.endsWith('.mp3')) {
-      return { sourceType: 'direct', streamUrl: url, parsedDuration };
-    }
-    // Web SoundCloud link -> generate clean SoundCloud Widget Player Embed URL
-    const encoded = encodeURIComponent(url);
-    const embedUrl = `https://w.soundcloud.com/player/?url=${encoded}&color=%23f43f5e&auto_play=true&hide_related=true&show_comments=false&show_user=false&show_reposts=false&show_teaser=false&visual=false`;
-    return { sourceType: 'soundcloud', embedUrl, parsedDuration };
-  }
-
-  // 2. Google Drive links
-  // Pattern A: https://drive.google.com/file/d/FILE_ID/view...
-  // Pattern B: https://drive.google.com/open?id=FILE_ID
-  // Pattern C: https://drive.google.com/uc?id=FILE_ID
-  const gDriveMatch = url.match(/drive\.google\.com\/(?:file\/d\/([a-zA-Z0-9_-]+)|open\?id=([a-zA-Z0-9_-]+)|uc\?(?:export=[a-z]+&)?id=([a-zA-Z0-9_-]+))/i);
-  const gDriveId = gDriveMatch ? (gDriveMatch[1] || gDriveMatch[2] || gDriveMatch[3]) : null;
-  if (gDriveId) {
-    const streamUrl = `https://docs.google.com/uc?export=open&id=${gDriveId}`;
-    const embedUrl = `https://drive.google.com/file/d/${gDriveId}/preview`;
-    return { sourceType: 'gdrive', streamUrl, embedUrl, parsedDuration };
-  }
-
-  // 3. YouTube links
-  // Pattern A: https://www.youtube.com/watch?v=VIDEO_ID
-  // Pattern B: https://youtu.be/VIDEO_ID
-  // Pattern C: https://www.youtube.com/shorts/VIDEO_ID
-  const ytMatch = url.match(/(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?|shorts)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/i);
-  if (ytMatch && ytMatch[1]) {
-    const ytId = ytMatch[1];
-    const embedUrl = `https://www.youtube.com/embed/${ytId}?autoplay=1&controls=0&loop=1&playlist=${ytId}&enablejsapi=1&origin=${encodeURIComponent(typeof window !== 'undefined' ? window.location.origin : '')}`;
-    return { sourceType: 'youtube', embedUrl, parsedDuration };
-  }
-
-  // 4. Dropbox links
-  if (url.includes('dropbox.com')) {
-    let streamUrl = url.replace(/[?&]dl=0/, '').replace(/[?&]dl=1/, '');
-    streamUrl += streamUrl.includes('?') ? '&raw=1' : '?raw=1';
-    return { sourceType: 'direct', streamUrl, parsedDuration };
-  }
-
-  // 5. OneDrive links
-  if (url.includes('1drv.ms') || url.includes('onedrive.live.com')) {
-    const streamUrl = url.replace('redir?', 'download?');
-    return { sourceType: 'direct', streamUrl, parsedDuration };
-  }
-
-  // 6. Direct HTTP/HTTPS audio file or stream
-  return { sourceType: 'direct', streamUrl: url, parsedDuration };
-}
+export let TRACK_LIST: AudioTrack[] = [...DEFAULT_TRACK_LIST];
 
 /**
  * Parses time string formatted as "MM:SS" or "HH:MM:SS" into total seconds.
@@ -127,45 +100,11 @@ export function formatSecondsToTime(seconds: number): string {
   return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
 }
 
-export const DEFAULT_TRACK_LIST: AudioTrack[] = [
-  {
-    id: 'track-1',
-    title: 'Gió Thổi Mùa Hạ (夏天的风)',
-    artist: 'Mellifluous Lofi Chill',
-    duration: '03:45',
-    mood: 'Rhodes Piano & Gió mùa hạ',
-  },
-  {
-    id: 'track-2',
-    title: 'Mùa Hè Năm Ấy (那年夏天)',
-    artist: 'Acoustic Piano & Music Box',
-    duration: '04:12',
-    mood: 'Tiếng đàn êm dịu tuổi thanh xuân',
-  },
-  {
-    id: 'track-3',
-    title: 'Tớ Thích Cậu (我喜欢你)',
-    artist: 'Sweet Warm Chords',
-    duration: '03:30',
-    mood: 'Giai điệu ngọt ngào chữa lành',
-  },
-  {
-    id: 'track-4',
-    title: 'Ký Ức Mùa Mưa Rào',
-    artist: 'Ambient Rain & Chimes',
-    duration: '02:58',
-    mood: 'Chuông gió & giọt mưa tí tách',
-  },
-];
-
-export let TRACK_LIST: AudioTrack[] = [...DEFAULT_TRACK_LIST];
-
-// Pentatonic note frequencies for sweet romantic melodies
+// Pentatonic notes for generating gentle ambient piano melody WAVs
 const PENTATONIC_FREQS = [
   261.63, 293.66, 329.63, 392.0, 440.0, 523.25, 587.33, 659.25, 783.99, 880.0, 1046.5,
 ];
 
-// Chord roots & harmonies
 const CHORD_PROGRESSIONS = [
   [
     [130.81, 261.63, 329.63, 392.0, 493.88],
@@ -193,24 +132,193 @@ const CHORD_PROGRESSIONS = [
   ],
 ];
 
+// Helper: Convert Web Audio AudioBuffer to standard WAV Blob
+function audioBufferToWavBlob(buffer: AudioBuffer): Blob {
+  const numChannels = buffer.numberOfChannels;
+  const sampleRate = buffer.sampleRate;
+  const bitDepth = 16;
+  const bytesPerSample = bitDepth / 8;
+  const blockAlign = numChannels * bytesPerSample;
+
+  const length = buffer.length * blockAlign;
+  const wavBuffer = new ArrayBuffer(44 + length);
+  const view = new DataView(wavBuffer);
+
+  const writeString = (offset: number, str: string) => {
+    for (let i = 0; i < str.length; i++) {
+      view.setUint8(offset + i, str.charCodeAt(i));
+    }
+  };
+
+  writeString(0, 'RIFF');
+  view.setUint32(4, 36 + length, true);
+  writeString(8, 'WAVE');
+  writeString(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * blockAlign, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bitDepth, true);
+  writeString(36, 'data');
+  view.setUint32(40, length, true);
+
+  const channels: Float32Array[] = [];
+  for (let i = 0; i < numChannels; i++) {
+    channels.push(buffer.getChannelData(i));
+  }
+
+  let offset = 44;
+  for (let i = 0; i < buffer.length; i++) {
+    for (let ch = 0; ch < numChannels; ch++) {
+      let sample = channels[ch][i];
+      sample = Math.max(-1, Math.min(1, sample));
+      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+      offset += 2;
+    }
+  }
+
+  return new Blob([view], { type: 'audio/wav' });
+}
+
+// Memory cache for rendered melody WAV URLs
+const melodyWavUrlCache = new Map<number, string>();
+
+/**
+ * Generates a warm, soothing ambient piano lofi WAV blob for default tracks
+ * and returns a standard Blob URL that HTMLAudioElement can play natively.
+ */
+async function generateMelodyWavUrl(trackIndex: number, durationSeconds = 180): Promise<string> {
+  if (melodyWavUrlCache.has(trackIndex)) {
+    return melodyWavUrlCache.get(trackIndex)!;
+  }
+
+  const sampleRate = 22050; // Optimized for rapid rendering and soft lofi warmth
+  const totalSamples = sampleRate * durationSeconds;
+
+  const OfflineCtxClass =
+    window.OfflineAudioContext ||
+    (window as unknown as { webkitOfflineAudioContext: typeof OfflineAudioContext }).webkitOfflineAudioContext;
+
+  const offlineCtx = new OfflineCtxClass(2, totalSamples, sampleRate);
+  const chords = CHORD_PROGRESSIONS[trackIndex % CHORD_PROGRESSIONS.length];
+  const chordStepDuration = 3.2;
+
+  // Master Gain
+  const masterGain = offlineCtx.createGain();
+  masterGain.gain.setValueAtTime(0.45, 0);
+  masterGain.connect(offlineCtx.destination);
+
+  let curTime = 0;
+  let chordIdx = 0;
+
+  while (curTime < durationSeconds) {
+    const chord = chords[chordIdx % chords.length];
+    chordIdx++;
+
+    // Play chord tones
+    chord.forEach((freq, idx) => {
+      const osc = offlineCtx.createOscillator();
+      const gain = offlineCtx.createGain();
+      osc.type = idx === 0 ? 'triangle' : 'sine';
+      osc.frequency.setValueAtTime(freq, curTime);
+
+      gain.gain.setValueAtTime(0.0001, curTime);
+      gain.gain.exponentialRampToValueAtTime(0.05 / chord.length, curTime + 0.3);
+      gain.gain.exponentialRampToValueAtTime(0.0001, curTime + chordStepDuration);
+
+      osc.connect(gain);
+      gain.connect(masterGain);
+      osc.start(curTime);
+      osc.stop(curTime + chordStepDuration);
+    });
+
+    // Play melody notes within the chord step
+    const notesInStep = 3;
+    const subStep = chordStepDuration / notesInStep;
+    for (let n = 0; n < notesInStep; n++) {
+      const noteTime = curTime + n * subStep;
+      if (noteTime >= durationSeconds) break;
+
+      const upperNotes = chord.filter((f) => f > 240);
+      const pitch =
+        upperNotes.length > 0 && Math.random() > 0.4
+          ? upperNotes[Math.floor(Math.random() * upperNotes.length)]
+          : PENTATONIC_FREQS[Math.floor(Math.random() * PENTATONIC_FREQS.length)];
+
+      const melOsc = offlineCtx.createOscillator();
+      const melGain = offlineCtx.createGain();
+      melOsc.type = 'sine';
+      melOsc.frequency.setValueAtTime(pitch, noteTime);
+
+      melGain.gain.setValueAtTime(0.0001, noteTime);
+      melGain.gain.exponentialRampToValueAtTime(0.09, noteTime + 0.06);
+      melGain.gain.exponentialRampToValueAtTime(0.0001, noteTime + 1.4);
+
+      melOsc.connect(melGain);
+      melGain.connect(masterGain);
+      melOsc.start(noteTime);
+      melOsc.stop(noteTime + 1.4);
+
+      // Gentle bell sparkle
+      if (Math.random() > 0.5) {
+        const bellPitch = PENTATONIC_FREQS[Math.floor(Math.random() * PENTATONIC_FREQS.length)] * 2;
+        const bellOsc = offlineCtx.createOscillator();
+        const bellGain = offlineCtx.createGain();
+        bellOsc.type = 'triangle';
+        bellOsc.frequency.setValueAtTime(bellPitch, noteTime + 0.2);
+
+        bellGain.gain.setValueAtTime(0.0001, noteTime + 0.2);
+        bellGain.gain.exponentialRampToValueAtTime(0.025, noteTime + 0.23);
+        bellGain.gain.exponentialRampToValueAtTime(0.0001, noteTime + 1.1);
+
+        bellOsc.connect(bellGain);
+        bellGain.connect(masterGain);
+        bellOsc.start(noteTime + 0.2);
+        bellOsc.stop(noteTime + 1.1);
+      }
+    }
+
+    curTime += chordStepDuration;
+  }
+
+  const renderedBuffer = await offlineCtx.startRendering();
+  const wavBlob = audioBufferToWavBlob(renderedBuffer);
+  const blobUrl = URL.createObjectURL(wavBlob);
+  melodyWavUrlCache.set(trackIndex, blobUrl);
+  return blobUrl;
+}
+
+/**
+ * Universal background music engine powered by ONE SINGLE HTMLAudioElement instance.
+ * Guarantees that play, pause, seek, volume, and mute work 100% consistently for all songs.
+ */
 class BackgroundMusicEngine {
-  private ctx: AudioContext | null = null;
+  // THE ONE AND ONLY AUDIO ELEMENT
+  private audio: HTMLAudioElement;
+
   private isPlaying = false;
   private currentTrackIndex = 0;
   private volume = 0.4;
-  private masterGain: GainNode | null = null;
-  private intervalId: number | null = null;
-  private progressTimerId: number | null = null;
-  private step = 0;
-  private audioEl: HTMLAudioElement | null = null;
+  private prevVolume = 0.4;
   private tracks: AudioTrack[] = [...DEFAULT_TRACK_LIST];
   private currentTime = 0;
-  private duration = 225; // in seconds
-  private currentSource: ResolvedAudioSource = { sourceType: 'synth', parsedDuration: 225 };
+  private duration = 210;
+  private isLoading = false;
+  private currentSourceType: AudioSourceType = 'synth';
   private listeners: Array<(state: AudioPlaybackState) => void> = [];
-  private fallbackTimeoutId: number | null = null;
+  private activeBlobUrl: string | null = null;
+  private retryCount = 0;
 
   constructor() {
+    this.audio = new Audio();
+    this.audio.preload = 'auto';
+
+    // DO NOT set crossOrigin = 'anonymous' so standard direct audio URLs play without CORS blocks!
+    this.audio.volume = this.volume;
+
+    this.attachAudioEventListeners();
     this.loadTracksFromStorage();
     this.initFirestoreSync();
 
@@ -218,6 +326,7 @@ class BackgroundMusicEngine {
       const savedVolume = localStorage.getItem('better_bgm_volume');
       if (savedVolume !== null) {
         this.volume = Math.max(0, Math.min(1, parseFloat(savedVolume)));
+        this.audio.volume = this.volume;
       }
       const savedTrack = localStorage.getItem('better_bgm_track');
       if (savedTrack !== null) {
@@ -230,10 +339,107 @@ class BackgroundMusicEngine {
       // safe fallback
     }
 
-    // Set initial duration
-    const track = this.getCurrentTrack();
-    this.currentSource = resolveAudioSource(track.audioUrl, track.duration);
-    this.duration = this.currentSource.parsedDuration || parseDurationToSeconds(track.duration);
+    const currentTrack = this.getCurrentTrack();
+    this.duration = parseDurationToSeconds(currentTrack.duration);
+    this.currentSourceType = this.resolveTrackSourceType(currentTrack);
+  }
+
+  private attachAudioEventListeners() {
+    // 1. Time Update
+    this.audio.addEventListener('timeupdate', () => {
+      if (!isNaN(this.audio.currentTime)) {
+        this.currentTime = this.audio.currentTime;
+        if (!isNaN(this.audio.duration) && this.audio.duration > 0 && isFinite(this.audio.duration)) {
+          this.duration = this.audio.duration;
+        }
+        this.notify();
+      }
+    });
+
+    // 2. Metadata Loaded
+    this.audio.addEventListener('loadedmetadata', () => {
+      if (!isNaN(this.audio.duration) && this.audio.duration > 0 && isFinite(this.audio.duration)) {
+        this.duration = this.audio.duration;
+      }
+      this.isLoading = false;
+      this.notify();
+    });
+
+    // 3. Duration Change
+    this.audio.addEventListener('durationchange', () => {
+      if (!isNaN(this.audio.duration) && this.audio.duration > 0 && isFinite(this.audio.duration)) {
+        this.duration = this.audio.duration;
+        this.notify();
+      }
+    });
+
+    // 4. Play Event
+    this.audio.addEventListener('play', () => {
+      this.isPlaying = true;
+      this.isLoading = false;
+      this.notify();
+    });
+
+    // 5. Pause Event
+    this.audio.addEventListener('pause', () => {
+      this.isPlaying = false;
+      this.notify();
+    });
+
+    // 6. Track Ended -> Auto Play Next
+    this.audio.addEventListener('ended', () => {
+      this.nextTrack();
+    });
+
+    // 7. Waiting / Buffering Event
+    this.audio.addEventListener('waiting', () => {
+      this.isLoading = true;
+      this.notify();
+    });
+
+    // 8. Can Play Event
+    this.audio.addEventListener('canplay', () => {
+      this.isLoading = false;
+      this.notify();
+    });
+
+    // 9. Error Handler with Automatic Proxy Fallback
+    this.audio.addEventListener('error', (e) => {
+      console.warn('Audio element error event:', e);
+      this.isLoading = false;
+
+      const track = this.getCurrentTrack();
+      // If external link failed, try proxying through backend
+      if (track.audioUrl && !track.audioUrl.startsWith('/api/') && this.retryCount === 0) {
+        this.retryCount = 1;
+        const proxyUrl = `/api/proxy-audio?url=${encodeURIComponent(track.audioUrl)}`;
+        console.log('Retrying audio playback through backend proxy:', proxyUrl);
+        this.audio.src = proxyUrl;
+        this.audio.load();
+        this.audio.play().catch(() => {});
+        return;
+      }
+
+      // If still fails, fallback to built-in melody
+      if (this.retryCount === 1) {
+        this.retryCount = 2;
+        console.log('Falling back to built-in ambient piano melody for track.');
+        generateMelodyWavUrl(this.currentTrackIndex, this.duration).then((url) => {
+          this.audio.src = url;
+          this.audio.load();
+          this.audio.play().catch(() => {});
+        });
+      }
+    });
+  }
+
+  private resolveTrackSourceType(track: AudioTrack): AudioSourceType {
+    if (track.sourceType) return track.sourceType;
+    if (!track.audioUrl) return 'synth';
+    const u = track.audioUrl.toLowerCase();
+    if (u.startsWith('/api/audio') || u.startsWith('blob:') || u.startsWith('data:')) return 'uploaded';
+    if (u.includes('drive.google.com')) return 'gdrive';
+    return 'direct';
   }
 
   private initFirestoreSync() {
@@ -257,7 +463,6 @@ class BackgroundMusicEngine {
         }
       );
 
-      // Also listen to legacy collection if accessible
       const tracksCol = collection(db, 'music_tracks');
       onSnapshot(
         tracksCol,
@@ -273,6 +478,8 @@ class BackgroundMusicEngine {
                 duration: data.duration || '03:30',
                 mood: data.mood || 'Thư giãn',
                 audioUrl: data.audioUrl || '',
+                sourceType: data.sourceType || (data.audioUrl ? 'direct' : 'synth'),
+                fileSize: data.fileSize,
                 addedBy: data.addedBy || 'Tác giả',
                 createdAt: data.createdAt || new Date().toISOString(),
               });
@@ -339,9 +546,9 @@ class BackgroundMusicEngine {
       tracks: this.getTracks(),
       currentTime: this.currentTime,
       duration: this.duration > 0 ? this.duration : parseDurationToSeconds(track.duration),
-      sourceType: this.currentSource.sourceType,
-      embedUrl: this.currentSource.embedUrl,
+      sourceType: this.currentSourceType,
       isMuted: this.volume === 0,
+      isLoading: this.isLoading,
     };
   }
 
@@ -358,18 +565,296 @@ class BackgroundMusicEngine {
     this.listeners.forEach((fn) => fn(state));
   }
 
+  /**
+   * Resolves the playable URL for a track:
+   * - If cached in IndexedDB: uses instant local Blob URL
+   * - If uploaded or local: uses direct URL (/api/audio/...)
+   * - If Google Drive: routes through /api/proxy-audio
+   * - If external stream: handles direct / proxy
+   * - If empty: generates high quality WAV Audio Blob from offline piano synth
+   */
+  private async resolvePlayableUrl(track: AudioTrack, trackIndex: number): Promise<string> {
+    // 1. Check client IndexedDB cache first
+    try {
+      const localBlob = await getAudioBlobFromIDB(track.id);
+      if (localBlob) {
+        if (this.activeBlobUrl) {
+          URL.revokeObjectURL(this.activeBlobUrl);
+        }
+        this.activeBlobUrl = URL.createObjectURL(localBlob);
+        this.currentSourceType = 'uploaded';
+        return this.activeBlobUrl;
+      }
+    } catch {}
+
+    const url = track.audioUrl?.trim();
+
+    // 2. Direct server-hosted audio, data URL or existing blob URL
+    if (url && (url.startsWith('/api/') || url.startsWith('blob:') || url.startsWith('data:'))) {
+      this.currentSourceType = 'uploaded';
+      return url;
+    }
+
+    // 3. Google Drive audio links -> Auto proxy via /api/proxy-audio
+    if (url && url.includes('drive.google.com')) {
+      this.currentSourceType = 'gdrive';
+      return `/api/proxy-audio?url=${encodeURIComponent(url)}`;
+    }
+
+    // 4. Dropbox links
+    if (url && url.includes('dropbox.com')) {
+      this.currentSourceType = 'direct';
+      let directUrl = url.replace(/[?&]dl=0/, '').replace(/[?&]dl=1/, '');
+      directUrl += directUrl.includes('?') ? '&raw=1' : '?raw=1';
+      return directUrl;
+    }
+
+    // 5. OneDrive links
+    if (url && (url.includes('1drv.ms') || url.includes('onedrive.live.com'))) {
+      this.currentSourceType = 'direct';
+      return url.replace('redir?', 'download?');
+    }
+
+    // 6. Direct HTTP/HTTPS audio stream
+    if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
+      this.currentSourceType = 'direct';
+      return url;
+    }
+
+    // 7. Built-in sweet lofi piano melody -> generated to WAV Blob URL
+    this.currentSourceType = 'synth';
+    const targetDuration = parseDurationToSeconds(track.duration) || 210;
+    return await generateMelodyWavUrl(trackIndex, targetDuration);
+  }
+
+  /**
+   * Main Play function.
+   * Directs playback through the single unified HTMLAudioElement.
+   */
+  public async play(trackIndex?: number) {
+    if (trackIndex !== undefined && trackIndex >= 0 && trackIndex < this.tracks.length) {
+      if (trackIndex !== this.currentTrackIndex) {
+        this.currentTrackIndex = trackIndex;
+        this.currentTime = 0;
+        try {
+          localStorage.setItem('better_bgm_track', trackIndex.toString());
+        } catch {}
+      }
+    }
+
+    const currentTrack = this.getCurrentTrack();
+    this.retryCount = 0;
+    this.isLoading = true;
+    this.notify();
+
+    try {
+      const playableUrl = await this.resolvePlayableUrl(currentTrack, this.currentTrackIndex);
+
+      // Only update src if different to allow continuous seeking and resume
+      if (this.audio.src !== playableUrl) {
+        this.audio.src = playableUrl;
+        this.audio.load();
+      }
+
+      this.audio.volume = this.volume;
+
+      // Resume at currentTime if valid
+      if (this.currentTime > 0 && !isNaN(this.currentTime)) {
+        try {
+          this.audio.currentTime = this.currentTime;
+        } catch {}
+      }
+
+      const playPromise = this.audio.play();
+      if (playPromise !== undefined) {
+        playPromise
+          .then(() => {
+            this.isPlaying = true;
+            this.isLoading = false;
+            this.notify();
+          })
+          .catch((err) => {
+            console.warn('Audio play was interrupted or waiting for user interaction:', err);
+            this.isPlaying = false;
+            this.isLoading = false;
+            this.notify();
+          });
+      }
+    } catch (err) {
+      console.error('Error resolving track for playback:', err);
+      this.isLoading = false;
+      this.notify();
+    }
+  }
+
+  public pause() {
+    this.audio.pause();
+    this.isPlaying = false;
+    this.notify();
+  }
+
+  public togglePlay() {
+    if (this.isPlaying) {
+      this.pause();
+    } else {
+      this.play();
+    }
+  }
+
+  /**
+   * Seek directly to target seconds in the track.
+   * Works consistently for every song.
+   */
+  public seek(seconds: number) {
+    const target = Math.max(0, Math.min(seconds, this.duration));
+    this.currentTime = target;
+
+    try {
+      if (!isNaN(this.audio.duration) && isFinite(this.audio.duration)) {
+        this.audio.currentTime = target;
+      }
+    } catch (err) {
+      console.warn('Audio seek error:', err);
+    }
+
+    this.notify();
+  }
+
+  public nextTrack() {
+    if (this.tracks.length === 0) return;
+    this.currentTime = 0;
+    const nextIdx = (this.currentTrackIndex + 1) % this.tracks.length;
+    this.play(nextIdx);
+  }
+
+  public prevTrack() {
+    if (this.tracks.length === 0) return;
+    this.currentTime = 0;
+    const prevIdx = (this.currentTrackIndex - 1 + this.tracks.length) % this.tracks.length;
+    this.play(prevIdx);
+  }
+
+  public setVolume(vol: number) {
+    const clamped = Math.max(0, Math.min(1, vol));
+    this.volume = clamped;
+    this.audio.volume = clamped;
+    this.audio.muted = clamped === 0;
+
+    try {
+      localStorage.setItem('better_bgm_volume', clamped.toString());
+    } catch {}
+    this.notify();
+  }
+
+  public toggleMute() {
+    if (this.volume === 0) {
+      this.setVolume(this.prevVolume || 0.4);
+    } else {
+      this.prevVolume = this.volume;
+      this.setVolume(0);
+    }
+  }
+
+  /**
+   * Adds an audio track created via file upload.
+   * Automatically uploads file to /api/upload-audio and caches in IndexedDB.
+   */
+  public async addUploadedTrack(params: {
+    file: File;
+    title: string;
+    artist?: string;
+    mood?: string;
+    duration?: string;
+    addedBy?: string;
+  }): Promise<AudioTrack> {
+    const trackId = `track-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+
+    // 1. Cache blob in IndexedDB immediately for instant offline playback
+    await saveAudioBlobToIDB(trackId, params.file, params.file.name);
+
+    // 2. Convert file to Base64 and upload to server
+    const base64 = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(params.file);
+    });
+
+    let publicUrl = '';
+    try {
+      const res = await fetch('/api/upload-audio', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filename: params.file.name,
+          data: base64,
+          mimeType: params.file.type || 'audio/mpeg',
+        }),
+      });
+
+      if (res.ok) {
+        const json = await res.json();
+        publicUrl = json.url;
+      }
+    } catch (err) {
+      console.warn('Server upload note, using local IndexedDB fallback:', err);
+    }
+
+    const fileSizeStr = `${(params.file.size / (1024 * 1024)).toFixed(1)} MB`;
+
+    const newTrack: AudioTrack = {
+      id: trackId,
+      title: params.title.trim(),
+      artist: (params.artist || 'Mellifluous').trim(),
+      duration: params.duration || '03:30',
+      mood: params.mood?.trim() || 'File âm thanh của bạn',
+      audioUrl: publicUrl || URL.createObjectURL(params.file),
+      sourceType: 'uploaded',
+      fileSize: fileSizeStr,
+      addedBy: params.addedBy || 'Tác giả',
+      createdAt: new Date().toISOString(),
+    };
+
+    this.tracks.push(newTrack);
+    this.saveTracksToStorage();
+    this.notify();
+
+    // Sync to Firestore
+    try {
+      await setDoc(
+        doc(db, 'site_stats', 'music_playlist'),
+        { tracks: this.tracks, updatedAt: new Date().toISOString() },
+        { merge: true }
+      );
+      await setDoc(doc(db, 'music_tracks', newTrack.id), newTrack).catch(() => {});
+    } catch (err) {
+      console.warn('Firestore track sync note:', err);
+    }
+
+    return newTrack;
+  }
+
+  /**
+   * Adds an audio track via online URL.
+   */
   public async addTrack(track: Omit<AudioTrack, 'id'>): Promise<AudioTrack> {
     const newTrack: AudioTrack = {
       ...track,
       id: `track-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       createdAt: new Date().toISOString(),
+      sourceType: this.resolveTrackSourceType(track as AudioTrack),
     };
+
     this.tracks.push(newTrack);
     this.saveTracksToStorage();
     this.notify();
 
     try {
-      await setDoc(doc(db, 'site_stats', 'music_playlist'), { tracks: this.tracks, updatedAt: new Date().toISOString() }, { merge: true });
+      await setDoc(
+        doc(db, 'site_stats', 'music_playlist'),
+        { tracks: this.tracks, updatedAt: new Date().toISOString() },
+        { merge: true }
+      );
       await setDoc(doc(db, 'music_tracks', newTrack.id), newTrack).catch(() => {});
     } catch (err) {
       console.warn('Error saving track to Firestore:', err);
@@ -385,6 +870,7 @@ class BackgroundMusicEngine {
     this.tracks[index] = {
       ...this.tracks[index],
       ...updates,
+      sourceType: this.resolveTrackSourceType({ ...this.tracks[index], ...updates }),
     };
     this.saveTracksToStorage();
 
@@ -395,7 +881,11 @@ class BackgroundMusicEngine {
     }
 
     try {
-      await setDoc(doc(db, 'site_stats', 'music_playlist'), { tracks: this.tracks, updatedAt: new Date().toISOString() }, { merge: true });
+      await setDoc(
+        doc(db, 'site_stats', 'music_playlist'),
+        { tracks: this.tracks, updatedAt: new Date().toISOString() },
+        { merge: true }
+      );
       await setDoc(doc(db, 'music_tracks', trackId), this.tracks[index], { merge: true }).catch(() => {});
     } catch (err) {
       console.warn('Error updating track in Firestore:', err);
@@ -422,8 +912,14 @@ class BackgroundMusicEngine {
       this.notify();
     }
 
+    await deleteAudioBlobFromIDB(trackId);
+
     try {
-      await setDoc(doc(db, 'site_stats', 'music_playlist'), { tracks: this.tracks, updatedAt: new Date().toISOString() }, { merge: true });
+      await setDoc(
+        doc(db, 'site_stats', 'music_playlist'),
+        { tracks: this.tracks, updatedAt: new Date().toISOString() },
+        { merge: true }
+      );
       await deleteDoc(doc(db, 'music_tracks', trackId)).catch(() => {});
     } catch (err) {
       console.warn('Error removing track from Firestore:', err);
@@ -433,11 +929,12 @@ class BackgroundMusicEngine {
   }
 
   public async resetToDefaultTracks(): Promise<void> {
-    this.stopExternalAudio();
+    this.audio.pause();
     const oldTracks = [...this.tracks];
     this.tracks = [...DEFAULT_TRACK_LIST];
     this.saveTracksToStorage();
     this.currentTrackIndex = 0;
+    this.currentTime = 0;
     if (this.isPlaying) {
       this.play(0);
     } else {
@@ -445,10 +942,15 @@ class BackgroundMusicEngine {
     }
 
     try {
-      await setDoc(doc(db, 'site_stats', 'music_playlist'), { tracks: this.tracks, updatedAt: new Date().toISOString() }, { merge: true });
+      await setDoc(
+        doc(db, 'site_stats', 'music_playlist'),
+        { tracks: this.tracks, updatedAt: new Date().toISOString() },
+        { merge: true }
+      );
       for (const t of oldTracks) {
         if (!DEFAULT_TRACK_LIST.some((def) => def.id === t.id)) {
           await deleteDoc(doc(db, 'music_tracks', t.id)).catch(() => {});
+          await deleteAudioBlobFromIDB(t.id);
         }
       }
       for (const def of DEFAULT_TRACK_LIST) {
@@ -457,380 +959,6 @@ class BackgroundMusicEngine {
     } catch (err) {
       console.warn('Error syncing default tracks to Firestore:', err);
     }
-  }
-
-  private initAudioContext() {
-    if (!this.ctx) {
-      const AudioContextClass =
-        window.AudioContext ||
-        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      this.ctx = new AudioContextClass();
-    }
-    if (this.ctx.state === 'suspended') {
-      this.ctx.resume();
-    }
-    if (!this.masterGain && this.ctx) {
-      this.masterGain = this.ctx.createGain();
-      this.masterGain.gain.setValueAtTime(this.volume, this.ctx.currentTime);
-      this.masterGain.connect(this.ctx.destination);
-    }
-  }
-
-  public togglePlay() {
-    if (this.isPlaying) {
-      this.pause();
-    } else {
-      this.play();
-    }
-  }
-
-  private stopExternalAudio() {
-    if (this.fallbackTimeoutId) {
-      window.clearTimeout(this.fallbackTimeoutId);
-      this.fallbackTimeoutId = null;
-    }
-    if (this.audioEl) {
-      this.audioEl.pause();
-      this.audioEl.removeAttribute('src');
-      this.audioEl.load();
-      this.audioEl = null;
-    }
-  }
-
-  public play(trackIndex?: number) {
-    if (trackIndex !== undefined && trackIndex >= 0 && trackIndex < this.tracks.length) {
-      this.currentTrackIndex = trackIndex;
-      this.currentTime = 0;
-      try {
-        localStorage.setItem('better_bgm_track', trackIndex.toString());
-      } catch {}
-    }
-
-    const currentTrack = this.getCurrentTrack();
-    this.currentSource = resolveAudioSource(currentTrack.audioUrl, currentTrack.duration);
-    this.duration = this.currentSource.parsedDuration || parseDurationToSeconds(currentTrack.duration);
-
-    this.stopExternalAudio();
-    this.stopProgressTimer();
-
-    // CASE 1: Embedded Player (SoundCloud / YouTube)
-    if (this.currentSource.sourceType === 'soundcloud' || this.currentSource.sourceType === 'youtube') {
-      this.isPlaying = true;
-      this.startProgressSimulation();
-      this.notify();
-      return;
-    }
-
-    // CASE 2: Google Drive Audio
-    if (this.currentSource.sourceType === 'gdrive') {
-      this.isPlaying = true;
-      // Try playing via direct stream first
-      if (this.currentSource.streamUrl) {
-        this.attemptDirectAudio(this.currentSource.streamUrl, () => {
-          // If direct Google Drive audio fails (e.g. CORS/redirect), keep playing via embed preview
-          console.log('Google Drive direct stream redirected; switched to background player.');
-          this.currentSource.sourceType = 'gdrive';
-          this.startProgressSimulation();
-          this.notify();
-        });
-      } else {
-        this.startProgressSimulation();
-        this.notify();
-      }
-      return;
-    }
-
-    // CASE 3: Direct Streaming URL (MP3/M4A/WAV/Dropbox/OneDrive)
-    if (this.currentSource.sourceType === 'direct' && this.currentSource.streamUrl) {
-      this.attemptDirectAudio(this.currentSource.streamUrl, () => {
-        // Fallback to ambient soft synth if direct URL is invalid or blocked
-        console.warn('Direct stream unreachable, playing ambient soothing synth.');
-        this.currentSource = { sourceType: 'synth', parsedDuration: this.duration };
-        this.playSynth();
-      });
-      return;
-    }
-
-    // CASE 4: Soft Built-in Ambient Synth
-    this.currentSource = { sourceType: 'synth', parsedDuration: this.duration };
-    this.playSynth();
-  }
-
-  private attemptDirectAudio(streamUrl: string, onFallback: () => void) {
-    try {
-      this.audioEl = new Audio();
-      this.audioEl.preload = 'auto';
-      this.audioEl.crossOrigin = 'anonymous';
-      this.audioEl.src = streamUrl;
-      this.audioEl.volume = this.volume;
-      this.audioEl.currentTime = this.currentTime;
-
-      // Event listeners for seek and progress bar
-      this.audioEl.addEventListener('timeupdate', () => {
-        if (this.audioEl && !isNaN(this.audioEl.currentTime)) {
-          this.currentTime = this.audioEl.currentTime;
-          if (!isNaN(this.audioEl.duration) && this.audioEl.duration > 0) {
-            this.duration = this.audioEl.duration;
-          }
-          this.notify();
-        }
-      });
-
-      this.audioEl.addEventListener('loadedmetadata', () => {
-        if (this.audioEl && !isNaN(this.audioEl.duration) && this.audioEl.duration > 0) {
-          this.duration = this.audioEl.duration;
-          this.notify();
-        }
-      });
-
-      this.audioEl.addEventListener('ended', () => {
-        this.nextTrack();
-      });
-
-      this.audioEl.addEventListener('error', (e) => {
-        console.warn('Audio tag error:', e);
-        this.stopExternalAudio();
-        onFallback();
-      });
-
-      // Set safety timeout in case the external stream hangs
-      this.fallbackTimeoutId = window.setTimeout(() => {
-        if (this.isPlaying && this.audioEl && this.audioEl.readyState === 0) {
-          console.warn('Audio stream timeout; using fallback.');
-          this.stopExternalAudio();
-          onFallback();
-        }
-      }, 7000);
-
-      const playPromise = this.audioEl.play();
-      if (playPromise !== undefined) {
-        playPromise
-          .then(() => {
-            if (this.fallbackTimeoutId) {
-              window.clearTimeout(this.fallbackTimeoutId);
-              this.fallbackTimeoutId = null;
-            }
-            this.isPlaying = true;
-            this.notify();
-          })
-          .catch((err) => {
-            console.warn('Audio play request rejected:', err);
-            this.stopExternalAudio();
-            onFallback();
-          });
-      }
-    } catch (e) {
-      console.warn('Direct audio creation failed:', e);
-      this.stopExternalAudio();
-      onFallback();
-    }
-  }
-
-  private playSynth() {
-    this.initAudioContext();
-    if (!this.ctx) return;
-
-    if (this.ctx.state === 'suspended') {
-      this.ctx.resume();
-    }
-
-    this.isPlaying = true;
-    this.startProgressSimulation();
-    this.notify();
-
-    if (this.intervalId) {
-      window.clearInterval(this.intervalId);
-    }
-
-    this.step = Math.floor(this.currentTime / 0.75) % 16;
-    this.playStep();
-    this.intervalId = window.setInterval(() => {
-      this.playStep();
-    }, 750);
-  }
-
-  private startProgressSimulation() {
-    this.stopProgressTimer();
-    this.progressTimerId = window.setInterval(() => {
-      if (this.isPlaying) {
-        this.currentTime += 0.5;
-        if (this.currentTime >= this.duration) {
-          this.currentTime = 0;
-          this.nextTrack();
-        } else {
-          this.notify();
-        }
-      }
-    }, 500);
-  }
-
-  private stopProgressTimer() {
-    if (this.progressTimerId) {
-      window.clearInterval(this.progressTimerId);
-      this.progressTimerId = null;
-    }
-  }
-
-  public pause() {
-    this.isPlaying = false;
-    this.stopProgressTimer();
-
-    if (this.audioEl) {
-      this.audioEl.pause();
-    }
-    if (this.intervalId) {
-      window.clearInterval(this.intervalId);
-      this.intervalId = null;
-    }
-    this.notify();
-  }
-
-  /**
-   * Seek directly to target seconds in the track
-   */
-  public seek(seconds: number) {
-    const target = Math.max(0, Math.min(seconds, this.duration));
-    this.currentTime = target;
-
-    if (this.audioEl && !isNaN(this.audioEl.duration)) {
-      try {
-        this.audioEl.currentTime = target;
-      } catch (err) {
-        console.warn('Audio seek error:', err);
-      }
-    }
-
-    if (this.currentSource.sourceType === 'synth') {
-      this.step = Math.floor(target / 0.75) % 16;
-    }
-
-    this.notify();
-  }
-
-  public nextTrack() {
-    if (this.tracks.length === 0) return;
-    const nextIdx = (this.currentTrackIndex + 1) % this.tracks.length;
-    this.play(nextIdx);
-  }
-
-  public prevTrack() {
-    if (this.tracks.length === 0) return;
-    const prevIdx = (this.currentTrackIndex - 1 + this.tracks.length) % this.tracks.length;
-    this.play(prevIdx);
-  }
-
-  public setVolume(vol: number) {
-    const clamped = Math.max(0, Math.min(1, vol));
-    this.volume = clamped;
-    if (this.audioEl) {
-      this.audioEl.volume = clamped;
-    }
-    if (this.masterGain && this.ctx) {
-      this.masterGain.gain.setValueAtTime(clamped, this.ctx.currentTime);
-    }
-    try {
-      localStorage.setItem('better_bgm_volume', clamped.toString());
-    } catch {}
-    this.notify();
-  }
-
-  private playStep() {
-    if (!this.ctx || !this.masterGain || !this.isPlaying || this.currentSource.sourceType !== 'synth') return;
-
-    const chords = CHORD_PROGRESSIONS[this.currentTrackIndex % CHORD_PROGRESSIONS.length];
-    const chordIndex = Math.floor(this.step / 4) % chords.length;
-    const currentChord = chords[chordIndex];
-
-    if (this.step % 4 === 0) {
-      this.playChord(currentChord, 3.2);
-    }
-
-    const melodyPitch = this.pickMelodyNote(currentChord);
-    this.playMelodyNote(melodyPitch, 1.4);
-
-    if (Math.random() > 0.4) {
-      const sparklePitch = PENTATONIC_FREQS[Math.floor(Math.random() * PENTATONIC_FREQS.length)];
-      setTimeout(() => {
-        if (this.isPlaying && this.currentSource.sourceType === 'synth') {
-          this.playBellNote(sparklePitch, 1.2);
-        }
-      }, 350);
-    }
-
-    this.step = (this.step + 1) % 16;
-  }
-
-  private pickMelodyNote(currentChord: number[]): number {
-    const chordNotes = currentChord.filter((freq) => freq > 250);
-    if (Math.random() > 0.3 && chordNotes.length > 0) {
-      return chordNotes[Math.floor(Math.random() * chordNotes.length)];
-    }
-    return PENTATONIC_FREQS[Math.floor(Math.random() * PENTATONIC_FREQS.length)];
-  }
-
-  private playMelodyNote(freq: number, duration: number) {
-    if (!this.ctx || !this.masterGain) return;
-    const now = this.ctx.currentTime;
-
-    const osc = this.ctx.createOscillator();
-    const noteGain = this.ctx.createGain();
-
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(freq, now);
-
-    noteGain.gain.setValueAtTime(0.0001, now);
-    noteGain.gain.exponentialRampToValueAtTime(0.09, now + 0.08);
-    noteGain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
-
-    osc.connect(noteGain);
-    noteGain.connect(this.masterGain);
-
-    osc.start(now);
-    osc.stop(now + duration);
-  }
-
-  private playBellNote(freq: number, duration: number) {
-    if (!this.ctx || !this.masterGain) return;
-    const now = this.ctx.currentTime;
-
-    const osc = this.ctx.createOscillator();
-    const noteGain = this.ctx.createGain();
-
-    osc.type = 'triangle';
-    osc.frequency.setValueAtTime(freq * 2, now);
-
-    noteGain.gain.setValueAtTime(0.0001, now);
-    noteGain.gain.exponentialRampToValueAtTime(0.035, now + 0.02);
-    noteGain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
-
-    osc.connect(noteGain);
-    noteGain.connect(this.masterGain);
-
-    osc.start(now);
-    osc.stop(now + duration);
-  }
-
-  private playChord(chordFreqs: number[], duration: number) {
-    if (!this.ctx || !this.masterGain) return;
-    const now = this.ctx.currentTime;
-
-    chordFreqs.forEach((freq, idx) => {
-      const osc = this.ctx!.createOscillator();
-      const gain = this.ctx!.createGain();
-
-      osc.type = idx === 0 ? 'triangle' : 'sine';
-      osc.frequency.setValueAtTime(freq, now);
-
-      gain.gain.setValueAtTime(0.0001, now);
-      gain.gain.exponentialRampToValueAtTime(0.045 / chordFreqs.length, now + 0.3);
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
-
-      osc.connect(gain);
-      gain.connect(this.masterGain!);
-
-      osc.start(now);
-      osc.stop(now + duration);
-    });
   }
 }
 

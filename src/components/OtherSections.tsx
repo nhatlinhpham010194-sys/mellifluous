@@ -42,14 +42,18 @@ export const OtherSections: React.FC = () => {
 
   // Background Music state
   const [isBgmPlaying, setIsBgmPlaying] = useState(false);
-  const [currentBgmTrack, setCurrentBgmTrack] = useState<AudioTrack>(TRACK_LIST[0]);
+  const [currentBgmTrack, setCurrentBgmTrack] = useState<AudioTrack>(() => bgmEngine.getCurrentTrack());
   const [bgmVolume, setBgmVolume] = useState(0.4);
+  const [bgmTracks, setBgmTracks] = useState<AudioTrack[]>(() => bgmEngine.getTracks());
 
   useEffect(() => {
     const unsubscribe = bgmEngine.subscribe((state) => {
       setIsBgmPlaying(state.isPlaying);
       setCurrentBgmTrack(state.track);
       setBgmVolume(state.volume);
+      if (state.tracks) {
+        setBgmTracks(state.tracks);
+      }
     });
     return unsubscribe;
   }, []);
@@ -900,7 +904,7 @@ export const OtherSections: React.FC = () => {
 
           {/* Track List */}
           <div className="space-y-3">
-            {TRACK_LIST.map((song, index) => {
+            {bgmTracks.map((song, index) => {
               const isThisPlaying = isBgmPlaying && currentBgmTrack.id === song.id;
               return (
                 <div
