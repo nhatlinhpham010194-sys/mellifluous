@@ -193,12 +193,16 @@ export function extractGoogleDriveId(url?: string): string | null {
 export function formatGoogleDriveStreamUrl(url: string): string {
   const fileId = extractGoogleDriveId(url);
   if (!fileId) return url;
-  return `https://docs.google.com/uc?export=download&id=${fileId}&confirm=t`;
+  // Route Google Drive via proxy to bypass Google's strict CORP: same-site and CORS policies
+  const apiBase = (typeof window !== 'undefined' && window.location.hostname.includes('github.io'))
+    ? 'https://ais-dev-7omy3nxbcenuidl2tgny3y-286439284546.asia-southeast1.run.app'
+    : '';
+  return `${apiBase}/api/proxy-audio?url=${encodeURIComponent(url)}`;
 }
 
 export function convertDropboxToDirectUrl(url: string): string {
   if (!url || !url.includes('dropbox.com')) return url;
-  let directUrl = url.replace(/[?&]dl=0/, '').replace(/[?&]dl=1/, '');
+  let directUrl = url.replace(/[?&]dl=[01]/g, '').replace(/[?&]raw=[01]/g, '');
   directUrl += directUrl.includes('?') ? '&raw=1' : '?raw=1';
   return directUrl;
 }

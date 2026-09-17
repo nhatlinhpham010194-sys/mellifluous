@@ -350,11 +350,19 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
         </span>
       );
     }
+    if (u.includes('dropbox.com')) {
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 text-[10px] font-medium border border-blue-200/80 dark:border-blue-800" title="Dropbox hỗ trợ phát trực tiếp trên 100% thiết bị di động và máy tính.">
+          <CloudIcon className="w-3 h-3 text-blue-500" />
+          <span>Dropbox (Phát mượt 100% thiết bị)</span>
+        </span>
+      );
+    }
     if (u.includes('drive.google.com')) {
       return (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-300 text-[10px] font-medium border border-sky-200/80 dark:border-sky-800">
-          <CloudIcon className="w-3 h-3" />
-          <span>Google Drive (Mọi thiết bị)</span>
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 text-[10px] font-medium border border-amber-300 dark:border-amber-800" title="Google Drive chặn phát nhúng trực tiếp, hệ thống sẽ phát qua máy chủ proxy. Khuyên dùng Dropbox để độc giả nghe mượt nhất.">
+          <CloudIcon className="w-3 h-3 text-amber-600" />
+          <span>Google Drive (Qua Proxy)</span>
         </span>
       );
     }
@@ -526,7 +534,7 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
               }`}
             >
               <LinkIcon className="w-3.5 h-3.5" />
-              <span>Dán link Google Drive / Online (Khuyên dùng)</span>
+              <span>Dán link Dropbox / Online (Khuyên dùng 100%)</span>
             </button>
             <button
               type="button"
@@ -538,7 +546,7 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
               }`}
             >
               <Upload className="w-3.5 h-3.5" />
-              <span>Tải file từ máy</span>
+              <span>Tải file từ máy (Chỉ máy này)</span>
             </button>
           </div>
         </div>
@@ -550,7 +558,7 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
               <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200/80 dark:border-amber-800 text-amber-800 dark:text-amber-200 text-xs flex items-start gap-2">
                 <span className="text-sm shrink-0">💡</span>
                 <p>
-                  <strong>Lưu ý về phát đa thiết bị:</strong> Tải file trực tiếp từ máy sẽ lưu trữ vào bộ nhớ thiết bị của bạn. Để đảm bảo <strong>100% độc giả trên mọi điện thoại, máy tính, máy chủ khác</strong> đều cùng nghe được bài hát, hãy tải file lên <strong>Google Drive</strong> (chọn quyền <em>"Bất kỳ ai có đường link đều có thể xem"</em>) rồi dán link vào tab <strong>"Dán link Google Drive"</strong>!
+                  <strong>Lưu ý về phát trên website tĩnh (GitHub Pages):</strong> Tải file từ máy chỉ lưu trữ trong bộ nhớ máy cục bộ của bạn. Để đảm bảo <strong>100% độc giả trên mọi điện thoại, máy tính, trình duyệt khác</strong> đều cùng nghe được bài hát của bạn mượt mà, hãy tải file lên <strong>Dropbox (miễn phí 2GB)</strong>, nhấn "Chia sẻ" → "Sao chép liên kết" rồi dán vào tab <strong>"Dán link Dropbox"</strong>!
                 </p>
               </div>
 
@@ -607,7 +615,7 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
                         Kéo thả file âm thanh vào đây, hoặc click để duyệt file từ máy tính/điện thoại
                       </p>
                       <p className="text-xs text-stone-500 dark:text-stone-400 mt-1 font-sans">
-                        Hỗ trợ định dạng: <span className="font-mono text-pink-600">.mp3, .m4a, .wav, .ogg, .aac, .flac</span> (Tối đa 50MB)
+                        Hỗ trợ định dạng: <span className="font-mono text-pink-600">.mp3, .m4a, .wav, .ogg, .aac, .flac</span> (Khuyên dùng Dropbox để độc giả nghe được)
                       </p>
                     </div>
                   </div>
@@ -620,34 +628,43 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
               <div className="space-y-1.5">
                 <label className="text-[11px] font-semibold text-stone-800 dark:text-stone-200 flex items-center gap-1.5">
                   <LinkIcon className="w-3.5 h-3.5 text-pink-500" />
-                  <span>Dán đường link âm thanh (Google Drive / Dropbox / Link direct .mp3):</span>
+                  <span>Dán đường link âm thanh (Dropbox / Google Drive / Link direct .mp3):</span>
                 </label>
                 <input
                   type="url"
                   value={audioUrl}
                   onChange={(e) => setAudioUrl(e.target.value)}
-                  placeholder="https://drive.google.com/file/d/.../view?usp=sharing hoặc link .mp3"
+                  placeholder="https://www.dropbox.com/scl/fi/.../song.mp3 hoặc https://drive.google.com/..."
                   className="w-full px-3.5 py-2.5 rounded-xl bg-stone-50 dark:bg-stone-900 border border-stone-300 dark:border-stone-600 text-stone-900 dark:text-stone-100 text-xs sm:text-sm font-mono focus:ring-2 focus:ring-pink-400 focus:outline-hidden"
                 />
               </div>
 
-              {audioUrl.includes('drive.google.com') && (
-                <div className="p-2.5 rounded-xl bg-sky-50 dark:bg-sky-950/40 border border-sky-200 dark:border-sky-800 text-sky-800 dark:text-sky-200 text-xs flex items-center gap-2">
-                  <CloudIcon className="w-4 h-4 text-sky-600 shrink-0" />
+              {audioUrl.includes('dropbox.com') && (
+                <div className="p-2.5 rounded-xl bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 text-blue-800 dark:text-blue-200 text-xs flex items-center gap-2">
+                  <CloudIcon className="w-4 h-4 text-blue-600 shrink-0" />
                   <span>
-                    ✅ <strong>Nhận diện link Google Drive!</strong> Hệ thống sẽ tự động phát trực tiếp trên mọi thiết bị (máy tính, điện thoại, máy chủ khác). Hãy chắc chắn file đã chọn quyền <em>"Bất kỳ ai có đường link đều có thể xem"</em>.
+                    ✅ <strong>Đã nhận diện link Dropbox (Tốt nhất)!</strong> Hệ thống tự động chuyển tiếp sang luồng phát chất lượng cao (raw stream), tương thích 100% mọi thiết bị của độc giả (iOS, Android, PC), hỗ trợ tua và tải cực nhanh.
+                  </span>
+                </div>
+              )}
+
+              {audioUrl.includes('drive.google.com') && (
+                <div className="p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-200 text-xs flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                  <span>
+                    ℹ️ <strong>Nhận diện link Google Drive.</strong> Google Drive áp dụng chính sách chặn phát nhúng trực tiếp trên web (CORP: same-site). Hệ thống sẽ định tuyến qua máy chủ proxy để hỗ trợ phát. <em>Gợi ý:</em> Để độc giả nghe mượt nhất mà không phụ thuộc máy chủ, bạn nên dùng <strong>Dropbox</strong> (hoàn toàn miễn phí, copy link dán vào là phát ngay)!
                   </span>
                 </div>
               )}
 
               <div className="p-3 rounded-xl bg-stone-50 dark:bg-stone-900 border border-stone-200 dark:border-stone-800 text-[11px] text-stone-600 dark:text-stone-400 space-y-1">
                 <p className="font-semibold text-stone-800 dark:text-stone-200 flex items-center gap-1">
-                  <span>✨ 3 bước tải nhạc Google Drive để phát cho mọi độc giả:</span>
+                  <span>✨ 3 bước dùng Dropbox phát nhạc cho 100% độc giả (Khuyên dùng):</span>
                 </p>
                 <ol className="list-decimal list-inside space-y-0.5 text-stone-600 dark:text-stone-300 pl-1">
-                  <li>Tải file MP3 hoặc bài hát lên <strong>Google Drive</strong> của bạn.</li>
-                  <li>Nhấp chuột phải vào file → chọn <strong>Chia sẻ (Share)</strong> → chuyển sang <strong>"Bất kỳ ai có đường link"</strong>.</li>
-                  <li>Sao chép link và dán vào ô phía trên. Hệ thống tự động chuyển tiếp để toàn bộ độc giả nghe được!</li>
+                  <li>Tải bài hát lên <strong>Dropbox.com</strong> của bạn (miễn phí 2GB, chứa được hàng chục bài dài).</li>
+                  <li>Nhấp vào nút <strong>Chia sẻ (Share)</strong> → chọn <strong>Sao chép liên kết (Copy link)</strong>.</li>
+                  <li>Dán link vào ô phía trên. Hệ thống tự động kích hoạt chế độ phát trực tuyến mượt mà cho mọi độc giả trên toàn thế giới!</li>
                 </ol>
               </div>
             </div>
@@ -778,7 +795,7 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
                     type="url"
                     value={editAudioUrl}
                     onChange={(e) => setEditAudioUrl(e.target.value)}
-                    placeholder="Link bài hát (Google Drive / Direct MP3 / Để trống nếu dùng lofi)"
+                    placeholder="Link bài hát (Dropbox / Google Drive / Direct .mp3 / Để trống nếu dùng giai điệu thư giãn)"
                     className="w-full px-3 py-1.5 rounded-lg border border-stone-300 dark:border-stone-600 bg-white dark:bg-stone-800 text-xs font-mono"
                   />
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -865,7 +882,7 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
                           onClick={() => handleStartEdit(t)}
                           className="underline font-medium hover:text-amber-900 dark:hover:text-amber-100 cursor-pointer"
                         >
-                          Bấm Sửa để dán link Google Drive (để độc giả ở máy khác cùng nghe)
+                          Bấm Sửa để dán link Dropbox (để độc giả ở máy khác cùng nghe 100%)
                         </button>
                       </div>
                     )}

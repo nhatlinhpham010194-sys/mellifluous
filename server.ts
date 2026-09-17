@@ -332,16 +332,16 @@ app.get('/api/proxy-audio', async (req: Request, res: Response) => {
 
     let targetUrl = rawUrl.trim();
 
-    // Convert Google Drive links to direct download/stream link
+    // Convert Google Drive links to direct drive.usercontent stream link
     const gDriveMatch = targetUrl.match(/drive\.google\.com\/(?:file\/d\/([a-zA-Z0-9_-]+)|open\?id=([a-zA-Z0-9_-]+)|uc\?(?:export=[a-z]+&)?id=([a-zA-Z0-9_-]+))/i);
     const gDriveId = gDriveMatch ? (gDriveMatch[1] || gDriveMatch[2] || gDriveMatch[3]) : null;
     if (gDriveId) {
-      targetUrl = `https://docs.google.com/uc?export=download&id=${gDriveId}&confirm=t`;
+      targetUrl = `https://drive.usercontent.google.com/download?id=${gDriveId}&export=download`;
     }
 
     // Convert Dropbox links to raw stream
     if (targetUrl.includes('dropbox.com')) {
-      targetUrl = targetUrl.replace(/[?&]dl=0/, '').replace(/[?&]dl=1/, '');
+      targetUrl = targetUrl.replace(/[?&]dl=[01]/g, '').replace(/[?&]raw=[01]/g, '');
       targetUrl += targetUrl.includes('?') ? '&raw=1' : '?raw=1';
     }
 
@@ -360,7 +360,10 @@ app.get('/api/proxy-audio', async (req: Request, res: Response) => {
 
     res.status(response.status);
     res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', '*');
     res.setHeader('Accept-Ranges', 'bytes');
+    res.removeHeader('cross-origin-resource-policy');
 
     const contentType = response.headers.get('content-type');
     if (contentType && !contentType.includes('text/html')) {
