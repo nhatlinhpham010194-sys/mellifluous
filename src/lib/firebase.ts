@@ -36,6 +36,17 @@ import {
   type Auth,
   type User,
 } from 'firebase/auth';
+import {
+  getStorage,
+  ref as storageRef,
+  uploadBytes,
+  uploadBytesResumable,
+  getDownloadURL,
+  deleteObject,
+  type FirebaseStorage,
+  type StorageReference,
+  type UploadTask,
+} from 'firebase/storage';
 import firebaseConfig from '../../firebase-applet-config.json';
 
 // Support both environment variables (for GitHub Pages / Vercel / external hosting) and direct config
@@ -63,7 +74,31 @@ export const auth: Auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
 
+// Initialize Firebase Storage
+export const storage: FirebaseStorage = (() => {
+  try {
+    if (resolvedFirebaseConfig.storageBucket) {
+      const bucketUrl = resolvedFirebaseConfig.storageBucket.startsWith('gs://')
+        ? resolvedFirebaseConfig.storageBucket
+        : `gs://${resolvedFirebaseConfig.storageBucket}`;
+      return getStorage(app, bucketUrl);
+    }
+    return getStorage(app);
+  } catch (err) {
+    console.warn('Firebase Storage initialization note:', err);
+    return getStorage(app);
+  }
+})();
+
 export {
+  storageRef,
+  uploadBytes,
+  uploadBytesResumable,
+  getDownloadURL,
+  deleteObject,
+  type FirebaseStorage,
+  type StorageReference,
+  type UploadTask,
   doc,
   setDoc,
   getDoc,

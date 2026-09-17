@@ -466,7 +466,7 @@ export default function App() {
 
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
                   <div className="lg:col-span-8">
-                    <OtherSections />
+                    <OtherSections onOpenAuthorStudio={() => setIsAuthorModalOpen(true)} />
                   </div>
                   <div className="lg:col-span-4">
                     <Sidebar
@@ -790,7 +790,7 @@ export default function App() {
                         {/* SUB-SECTION 3: OTHER (TÂM SỰ & NHẠC HÈ) */}
                         {activeLetter === 'other' && (
                           <div className="animate-in fade-in duration-300">
-                            <OtherSections />
+                            <OtherSections onOpenAuthorStudio={() => setIsAuthorModalOpen(true)} />
                           </div>
                         )}
                       </div>

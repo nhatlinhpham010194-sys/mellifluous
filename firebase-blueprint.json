@@ -159,18 +159,24 @@
     },
     "music_tracks": {
       "title": "Music Playlist Track",
-      "description": "Background music tracks with title, artist, audio link and mood",
+      "description": "Background music tracks with title, artist, Firebase Storage audio file URL, cover art and mood",
       "type": "object",
       "properties": {
         "title": { "type": "string" },
         "artist": { "type": "string" },
         "duration": { "type": "string" },
+        "durationSeconds": { "type": "number" },
         "mood": { "type": "string" },
         "audioUrl": { "type": "string" },
+        "storagePath": { "type": "string" },
+        "coverUrl": { "type": "string" },
+        "coverStoragePath": { "type": "string" },
+        "fileSize": { "type": "number" },
         "addedBy": { "type": "string" },
-        "createdAt": { "type": "string" }
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
       },
-      "required": ["title"]
+      "required": ["title", "audioUrl"]
     }
   },
   "firestore": {

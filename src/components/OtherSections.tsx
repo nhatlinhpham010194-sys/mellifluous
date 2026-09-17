@@ -25,7 +25,7 @@ import {
   Copy,
 } from 'lucide-react';
 import { PLAYLIST } from '../data/mockData';
-import { bgmEngine, AudioTrack, TRACK_LIST } from '../utils/audioPlayer';
+import { bgmEngine, AudioTrack } from '../utils/audioPlayer';
 import {
   subscribeToReaderLetters,
   sendReaderLetter,
@@ -36,13 +36,18 @@ import {
 } from '../lib/realtimeService';
 import { useAuth } from '../lib/authContext';
 
-export const OtherSections: React.FC = () => {
+interface OtherSectionsProps {
+  onOpenAuthorStudio?: () => void;
+}
+
+export const OtherSections: React.FC<OtherSectionsProps> = ({ onOpenAuthorStudio }) => {
   const [activeTab, setActiveTab] = useState<'diary' | 'music' | 'faq'>('diary');
   const { user, isAuthor, isMainAuthor, isCollaborator, roleBadge, openAuthModal } = useAuth();
 
   // Background Music state
   const [isBgmPlaying, setIsBgmPlaying] = useState(false);
-  const [currentBgmTrack, setCurrentBgmTrack] = useState<AudioTrack>(TRACK_LIST[0]);
+  const [currentBgmTrack, setCurrentBgmTrack] = useState<AudioTrack>(() => bgmEngine.getCurrentTrack());
+  const [bgmTracks, setBgmTracks] = useState<AudioTrack[]>(() => bgmEngine.getTracks());
   const [bgmVolume, setBgmVolume] = useState(0.4);
 
   useEffect(() => {
@@ -50,6 +55,9 @@ export const OtherSections: React.FC = () => {
       setIsBgmPlaying(state.isPlaying);
       setCurrentBgmTrack(state.track);
       setBgmVolume(state.volume);
+      if (state.tracks) {
+        setBgmTracks(state.tracks);
+      }
     });
     return unsubscribe;
   }, []);
@@ -840,7 +848,16 @@ export const OtherSections: React.FC = () => {
               </h2>
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-xs font-sans text-stone-400">4 bài hát êm dịu</span>
+              <span className="text-xs font-sans text-stone-400">{bgmTracks.length} bài hát</span>
+              {isAuthor && onOpenAuthorStudio && (
+                <button
+                  type="button"
+                  onClick={onOpenAuthorStudio}
+                  className="px-2.5 py-1 rounded-lg bg-pink-100 dark:bg-pink-950 text-pink-700 dark:text-pink-300 text-xs font-semibold hover:bg-pink-200 transition-colors cursor-pointer"
+                >
+                  Tải nhạc lên Firebase Storage
+                </button>
+              )}
               {isBgmPlaying && (
                 <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-pink-100 text-pink-700 dark:bg-pink-950/60 dark:text-pink-300 text-xs font-semibold">
                   <span className="w-1.5 h-1.5 rounded-full bg-pink-500 animate-pulse" />
@@ -851,7 +868,7 @@ export const OtherSections: React.FC = () => {
           </div>
 
           <p className="text-xs sm:text-sm text-stone-600 dark:text-stone-300 font-sans leading-relaxed">
-            Tuyển tập những bài hát được Mel tuyển chọn để phát liên tục trong nền. Khi bật lên, âm nhạc sẽ đồng hành cùng bạn xuyên suốt khi đọc từng chương truyện và chuyển đổi giữa các trang mà không bị ngắt quãng.
+            Tuyển tập những bài hát được Mel tuyển chọn và lưu trữ trên Firebase Storage để phát liên tục trong nền qua trình phát HTML5 duy nhất. Khi bật lên, âm nhạc sẽ đồng hành cùng bạn xuyên suốt khi đọc từng chương truyện và chuyển đổi giữa các trang mà không bị ngắt quãng.
           </p>
 
           {/* Persistent Background Music Banner & Volume Control */}
@@ -869,6 +886,21 @@ export const OtherSections: React.FC = () => {
               >
                 {isBgmPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5 ml-0.5" />}
               </button>
+
+              {/* Cover thumbnail if available */}
+              <div className="w-10 h-10 rounded-xl overflow-hidden bg-white/80 dark:bg-stone-800 shrink-0 border border-stone-200 dark:border-stone-700 flex items-center justify-center">
+                {currentBgmTrack.coverUrl ? (
+                  <img
+                    src={currentBgmTrack.coverUrl}
+                    alt={currentBgmTrack.title}
+                    className="w-full h-full object-cover"
+                    referrerPolicy="no-referrer"
+                  />
+                ) : (
+                  <Music className="w-4 h-4 text-pink-500" />
+                )}
+              </div>
+
               <div className="min-w-0">
                 <p className="font-serif text-sm font-bold text-stone-800 dark:text-stone-100 truncate">
                   {currentBgmTrack.title}
@@ -900,7 +932,7 @@ export const OtherSections: React.FC = () => {
 
           {/* Track List */}
           <div className="space-y-3">
-            {TRACK_LIST.map((song, index) => {
+            {bgmTracks.map((song, index) => {
               const isThisPlaying = isBgmPlaying && currentBgmTrack.id === song.id;
               return (
                 <div
@@ -913,27 +945,49 @@ export const OtherSections: React.FC = () => {
                 >
                   <div className="flex items-center gap-3 min-w-0">
                     <span className="font-mono text-sm font-bold text-sky-500 w-6 shrink-0">
-                      0{index + 1}
+                      {index < 9 ? `0${index + 1}` : index + 1}
                     </span>
+
+                    {/* Album Art Cover or placeholder */}
+                    <div className="w-9 h-9 rounded-xl overflow-hidden bg-stone-200 dark:bg-stone-800 shrink-0 flex items-center justify-center border border-stone-300/60 dark:border-stone-700">
+                      {song.coverUrl ? (
+                        <img
+                          src={song.coverUrl}
+                          alt={song.title}
+                          className="w-full h-full object-cover"
+                          referrerPolicy="no-referrer"
+                        />
+                      ) : (
+                        <Music className="w-4 h-4 text-stone-400" />
+                      )}
+                    </div>
+
                     <div className="min-w-0">
-                      <h3
-                        className={`font-serif text-sm font-semibold truncate transition-colors ${
-                          isThisPlaying
-                            ? 'text-pink-600 dark:text-pink-300 font-bold'
-                            : 'text-stone-800 dark:text-stone-100 group-hover:text-sky-600 dark:group-hover:text-sky-400'
-                        }`}
-                      >
-                        {song.title}
-                      </h3>
+                      <div className="flex items-center gap-2">
+                        <h3
+                          className={`font-serif text-sm font-semibold truncate transition-colors ${
+                            isThisPlaying
+                              ? 'text-pink-600 dark:text-pink-300 font-bold'
+                              : 'text-stone-800 dark:text-stone-100 group-hover:text-sky-600 dark:group-hover:text-sky-400'
+                          }`}
+                        >
+                          {song.title}
+                        </h3>
+                        {song.storagePath && (
+                          <span className="px-1.5 py-0.2 rounded-xs bg-pink-100 dark:bg-pink-950 text-pink-700 dark:text-pink-300 text-[9px] font-mono shrink-0">
+                            Cloud
+                          </span>
+                        )}
+                      </div>
                       <p className="text-xs text-stone-500 dark:text-stone-400 font-sans truncate">
-                        {song.artist} • {song.mood}
+                        {song.artist} • {song.mood || 'Thư giãn'}
                       </p>
                     </div>
                   </div>
 
                   <div className="flex items-center gap-3 shrink-0">
                     <span className="text-xs font-mono text-stone-400 hidden sm:inline">
-                      {song.duration}
+                      {song.duration || '03:30'}
                     </span>
                     <button
                       type="button"
