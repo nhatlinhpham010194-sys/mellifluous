@@ -554,7 +554,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     if (!tocSearch.trim()) return true;
     const q = tocSearch.toLowerCase();
     return (
-      (c.title && c.title.toLowerCase().includes(q)) ||
+      c.title.toLowerCase().includes(q) ||
       `chương ${c.chapterNumber}`.includes(q) ||
       (isExtra && 'phiên ngoại ngoại truyện pn'.includes(q))
     );

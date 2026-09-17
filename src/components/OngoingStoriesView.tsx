@@ -37,12 +37,12 @@ export const OngoingStoriesView: React.FC<OngoingStoriesViewProps> = ({
 
   // Extract all unique genres
   const allGenres = Array.from(
-    new Set(ongoingStories.flatMap((s) => (Array.isArray(s.genre) ? s.genre : [])))
+    new Set(ongoingStories.flatMap((s) => s.genre))
   );
 
   // Apply genre filter and sorting
   const filtered = ongoingStories
-    .filter((s) => (selectedGenre === 'all' ? true : (Array.isArray(s.genre) && s.genre.includes(selectedGenre))))
+    .filter((s) => (selectedGenre === 'all' ? true : s.genre.includes(selectedGenre)))
     .sort((a, b) => {
       if (sortBy === 'views') return b.views - a.views;
       if (sortBy === 'likes') return b.likes - a.likes;

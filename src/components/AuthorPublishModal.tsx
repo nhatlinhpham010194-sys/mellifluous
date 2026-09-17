@@ -839,7 +839,7 @@ export const AuthorPublishModal: React.FC<AuthorPublishModalProps> = ({
                     {getStoryGenres(availableGenres)
                       .filter((genre) =>
                         !newStoryGenreSearch.trim() ||
-                        (genre && genre.toLowerCase().includes(newStoryGenreSearch.toLowerCase()))
+                        genre.toLowerCase().includes(newStoryGenreSearch.toLowerCase())
                       )
                       .map((genre) => {
                         const isSelected = selectedGenres.includes(genre);

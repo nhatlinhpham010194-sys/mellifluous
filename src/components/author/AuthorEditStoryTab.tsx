@@ -147,7 +147,7 @@ export const AuthorEditStoryTab: React.FC<AuthorEditStoryTabProps> = ({
   const filteredAvailableGenres = useMemo(() => {
     if (!genreSearch.trim()) return availableGenres;
     const q = genreSearch.toLowerCase();
-    return availableGenres.filter((g) => g && typeof g === 'string' && g.toLowerCase().includes(q));
+    return availableGenres.filter((g) => g.toLowerCase().includes(q));
   }, [availableGenres, genreSearch]);
 
   const handleSaveStory = async (e: React.FormEvent) => {
