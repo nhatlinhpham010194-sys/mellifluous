@@ -98,6 +98,11 @@ app.get('/api/sync', (req: Request, res: Response) => {
   });
 });
 
+// Active readers endpoint
+app.get('/api/active-readers', (req: Request, res: Response) => {
+  res.json({ count: Math.max(1, sseClients.length) });
+});
+
 // Realtime SSE endpoint
 app.get('/api/events', (req: Request, res: Response) => {
   res.setHeader('Content-Type', 'text/event-stream');
@@ -109,11 +114,13 @@ app.get('/api/events', (req: Request, res: Response) => {
   const newClient: SSEClient = { id: clientId, res };
   sseClients.push(newClient);
 
-  // Send initial welcome
+  // Send initial welcome & current active readers count
   res.write(`data: ${JSON.stringify({ type: 'connected', clientId })}\n\n`);
+  broadcastEvent('active_readers', { count: Math.max(1, sseClients.length) });
 
   req.on('close', () => {
     sseClients = sseClients.filter((c) => c.id !== clientId);
+    broadcastEvent('active_readers', { count: Math.max(1, sseClients.length) });
   });
 });
 

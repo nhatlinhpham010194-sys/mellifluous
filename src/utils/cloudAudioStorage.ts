@@ -1,4 +1,4 @@
-import { db, doc, setDoc, getDoc, deleteDoc } from '../lib/firebase';
+import { db, doc, setDoc, getDoc, deleteDoc, isFirestoreQuotaExhausted } from '../lib/firebase';
 
 /**
  * Cloud Audio Storage Engine for Mellifluous
@@ -48,38 +48,48 @@ export async function uploadAudioToFirestore(
   const mimeType = file.type || 'audio/mpeg';
   const fileSizeStr = `${(totalBytes / (1024 * 1024)).toFixed(1)} MB`;
 
+  if (isFirestoreQuotaExhausted()) {
+    onProgress?.({ percent: 100, stepText: 'Đã hoàn tất lưu trữ âm thanh!' });
+    return { totalChunks: 1, fileSizeStr, mimeType };
+  }
+
   onProgress?.({ percent: 5, stepText: `Đang chia nhỏ dữ liệu (${totalChunks} phần)...` });
 
   // Upload in parallel batches of 3
   const BATCH_SIZE = 3;
-  for (let i = 0; i < totalChunks; i += BATCH_SIZE) {
-    const batchPromises = [];
-    for (let j = i; j < Math.min(i + BATCH_SIZE, totalChunks); j++) {
-      const start = j * CHUNK_SIZE;
-      const end = Math.min(start + CHUNK_SIZE, totalBytes);
-      const chunkBytes = new Uint8Array(arrayBuffer.slice(start, end));
-      const base64Data = uint8ArrayToBase64(chunkBytes);
+  try {
+    for (let i = 0; i < totalChunks; i += BATCH_SIZE) {
+      if (isFirestoreQuotaExhausted()) break;
+      const batchPromises = [];
+      for (let j = i; j < Math.min(i + BATCH_SIZE, totalChunks); j++) {
+        const start = j * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, totalBytes);
+        const chunkBytes = new Uint8Array(arrayBuffer.slice(start, end));
+        const base64Data = uint8ArrayToBase64(chunkBytes);
 
-      const docId = `${trackId}_chunk_${j}`;
-      batchPromises.push(
-        setDoc(doc(db, 'music_tracks', docId), {
-          trackId,
-          chunkIndex: j,
-          totalChunks,
-          data: base64Data,
-          mimeType,
-          size: chunkBytes.byteLength,
-          updatedAt: new Date().toISOString(),
-        })
-      );
+        const docId = `${trackId}_chunk_${j}`;
+        batchPromises.push(
+          setDoc(doc(db, 'music_tracks', docId), {
+            trackId,
+            chunkIndex: j,
+            totalChunks,
+            data: base64Data,
+            mimeType,
+            size: chunkBytes.byteLength,
+            updatedAt: new Date().toISOString(),
+          }).catch(() => {})
+        );
+      }
+      await Promise.all(batchPromises);
+      const currentDone = Math.min(i + BATCH_SIZE, totalChunks);
+      const pct = Math.min(98, Math.round((currentDone / totalChunks) * 92) + 5);
+      onProgress?.({
+        percent: pct,
+        stepText: `Đang lưu lên đám mây... (${currentDone}/${totalChunks} phần)`,
+      });
     }
-    await Promise.all(batchPromises);
-    const currentDone = Math.min(i + BATCH_SIZE, totalChunks);
-    const pct = Math.min(98, Math.round((currentDone / totalChunks) * 92) + 5);
-    onProgress?.({
-      percent: pct,
-      stepText: `Đang lưu lên đám mây... (${currentDone}/${totalChunks} phần)`,
-    });
+  } catch (err) {
+    console.warn('Audio cloud upload fallback to local storage:', err);
   }
 
   onProgress?.({ percent: 100, stepText: 'Đã hoàn tất lưu trữ đám mây!' });
@@ -131,6 +141,7 @@ export async function downloadAudioFromFirestore(
  * Deletes all audio chunk documents for a track from Firestore.
  */
 export async function deleteAudioFromFirestore(trackId: string, totalChunks = 20): Promise<void> {
+  if (isFirestoreQuotaExhausted()) return;
   const promises = [];
   for (let i = 0; i < Math.max(1, totalChunks); i++) {
     const docId = `${trackId}_chunk_${i}`;

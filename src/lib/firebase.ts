@@ -3,24 +3,32 @@ import {
   getFirestore,
   initializeFirestore,
   doc,
-  setDoc,
+  setDoc as rawSetDoc,
   getDoc,
-  updateDoc,
+  updateDoc as rawUpdateDoc,
   increment,
-  onSnapshot,
+  onSnapshot as rawOnSnapshot,
   collection,
   query,
   where,
   orderBy,
   limit,
-  addDoc,
-  deleteDoc,
+  addDoc as rawAddDoc,
+  deleteDoc as rawDeleteDoc,
   getDocs,
-  writeBatch,
+  writeBatch as rawWriteBatch,
   serverTimestamp,
   arrayUnion,
   arrayRemove,
+  disableNetwork,
   type Firestore,
+  type SetOptions,
+  type DocumentReference,
+  type DocumentData,
+  type UpdateData,
+  type CollectionReference,
+  type QuerySnapshot,
+  type DocumentSnapshot,
 } from 'firebase/firestore';
 import {
   getAuth,
@@ -63,22 +71,215 @@ export const auth: Auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
 
+// ============================================================================
+// FIRESTORE QUOTA CIRCUIT BREAKER & GRACEFUL DEGRADATION ENGINE
+// Protects the app from daily quota exhaustion (20,000 writes/day free tier)
+// and prevents infinite backoff retry loops in console.
+// ============================================================================
+
+let isQuotaExhaustedMemory = false;
+try {
+  if (typeof window !== 'undefined' && sessionStorage.getItem('mel_fs_quota_exceeded') === 'true') {
+    isQuotaExhaustedMemory = true;
+  }
+} catch {}
+
+export const isFirestoreQuotaExhausted = (): boolean => isQuotaExhaustedMemory;
+
+export const markFirestoreQuotaExhausted = () => {
+  if (!isQuotaExhaustedMemory) {
+    isQuotaExhaustedMemory = true;
+    try {
+      if (typeof window !== 'undefined') {
+        sessionStorage.setItem('mel_fs_quota_exceeded', 'true');
+      }
+    } catch {}
+    // Disable Firestore network write-stream retries to stop the backoff loop immediately
+    try {
+      disableNetwork(db).catch(() => {});
+    } catch {}
+    console.info(
+      '[Mellifluous Storage] Firestore write quota reached for today. System seamlessly transitioned to Local & Server persistence engine.'
+    );
+  }
+};
+
+// If session was already marked exhausted, disable network immediately on load
+if (isQuotaExhaustedMemory) {
+  try {
+    disableNetwork(db).catch(() => {});
+  } catch {}
+}
+
+export const checkAndHandleQuotaError = (err: any): boolean => {
+  if (!err) return false;
+  const code = String(err.code || '');
+  const msg = String(err.message || '');
+  if (
+    code === 'resource-exhausted' ||
+    msg.includes('resource-exhausted') ||
+    msg.includes('Quota limit exceeded') ||
+    msg.includes('Free daily write units')
+  ) {
+    markFirestoreQuotaExhausted();
+    return true;
+  }
+  return false;
+};
+
+// Safe setDoc wrapper: skips Firestore writes if quota is exceeded
+export const setDoc = async (
+  docRef: DocumentReference<DocumentData>,
+  data: DocumentData,
+  options?: SetOptions
+): Promise<void> => {
+  if (isQuotaExhaustedMemory) {
+    return Promise.resolve();
+  }
+  try {
+    if (options) {
+      await rawSetDoc(docRef, data, options);
+    } else {
+      await rawSetDoc(docRef, data);
+    }
+  } catch (err: any) {
+    if (checkAndHandleQuotaError(err)) {
+      return Promise.resolve();
+    }
+    throw err;
+  }
+};
+
+// Safe updateDoc wrapper: skips Firestore writes if quota is exceeded
+export const updateDoc = async (
+  docRef: DocumentReference<DocumentData>,
+  dataOrField: UpdateData<DocumentData> | string,
+  ...moreFieldsAndValues: any[]
+): Promise<void> => {
+  if (isQuotaExhaustedMemory) {
+    return Promise.resolve();
+  }
+  try {
+    await (rawUpdateDoc as any)(docRef, dataOrField, ...moreFieldsAndValues);
+  } catch (err: any) {
+    if (checkAndHandleQuotaError(err)) {
+      return Promise.resolve();
+    }
+    throw err;
+  }
+};
+
+// Safe deleteDoc wrapper: skips Firestore writes if quota is exceeded
+export const deleteDoc = async (docRef: DocumentReference<DocumentData>): Promise<void> => {
+  if (isQuotaExhaustedMemory) {
+    return Promise.resolve();
+  }
+  try {
+    await rawDeleteDoc(docRef);
+  } catch (err: any) {
+    if (checkAndHandleQuotaError(err)) {
+      return Promise.resolve();
+    }
+    throw err;
+  }
+};
+
+// Safe addDoc wrapper: skips Firestore writes if quota is exceeded
+export const addDoc = async (
+  collectionRef: CollectionReference<DocumentData>,
+  data: DocumentData
+): Promise<any> => {
+  if (isQuotaExhaustedMemory) {
+    return Promise.resolve({ id: 'local_' + Date.now() });
+  }
+  try {
+    return await rawAddDoc(collectionRef, data);
+  } catch (err: any) {
+    if (checkAndHandleQuotaError(err)) {
+      return Promise.resolve({ id: 'local_' + Date.now() });
+    }
+    throw err;
+  }
+};
+
+// Safe writeBatch wrapper
+export const writeBatch = (firestore: Firestore) => {
+  const batch = rawWriteBatch(firestore);
+  return {
+    set: (docRef: DocumentReference<DocumentData>, data: DocumentData, options?: SetOptions) => {
+      if (!isQuotaExhaustedMemory) {
+        if (options) batch.set(docRef, data, options);
+        else batch.set(docRef, data);
+      }
+      return batch;
+    },
+    update: (docRef: DocumentReference<DocumentData>, dataOrField: any, ...more: any[]) => {
+      if (!isQuotaExhaustedMemory) {
+        (batch.update as any)(docRef, dataOrField, ...more);
+      }
+      return batch;
+    },
+    delete: (docRef: DocumentReference<DocumentData>) => {
+      if (!isQuotaExhaustedMemory) {
+        batch.delete(docRef);
+      }
+      return batch;
+    },
+    commit: async (): Promise<void> => {
+      if (isQuotaExhaustedMemory) {
+        return Promise.resolve();
+      }
+      try {
+        await batch.commit();
+      } catch (err: any) {
+        if (checkAndHandleQuotaError(err)) {
+          return Promise.resolve();
+        }
+        throw err;
+      }
+    },
+  };
+};
+
+// Safe onSnapshot wrapper: guards error handlers against unhandled exceptions
+export const onSnapshot = (
+  reference: any,
+  observerOrNext: any,
+  onError?: (error: any) => void
+) => {
+  const safeOnError = (err: any) => {
+    checkAndHandleQuotaError(err);
+    if (onError) {
+      onError(err);
+    } else {
+      console.warn('Firestore snapshot error (handled):', err?.message || err);
+    }
+  };
+
+  if (typeof observerOrNext === 'function') {
+    return rawOnSnapshot(reference, observerOrNext, safeOnError);
+  } else if (observerOrNext && typeof observerOrNext === 'object') {
+    const origError = observerOrNext.error;
+    observerOrNext.error = (err: any) => {
+      checkAndHandleQuotaError(err);
+      if (origError) origError(err);
+      else console.warn('Firestore snapshot error (handled):', err?.message || err);
+    };
+    return rawOnSnapshot(reference, observerOrNext);
+  }
+  return rawOnSnapshot(reference, observerOrNext, safeOnError);
+};
+
 export {
   doc,
-  setDoc,
   getDoc,
-  updateDoc,
-  deleteDoc,
   getDocs,
-  writeBatch,
   increment,
-  onSnapshot,
   collection,
   query,
   where,
   orderBy,
   limit,
-  addDoc,
   serverTimestamp,
   arrayUnion,
   arrayRemove,

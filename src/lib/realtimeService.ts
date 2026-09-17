@@ -17,6 +17,7 @@ import {
   addDoc,
   arrayUnion,
   arrayRemove,
+  isFirestoreQuotaExhausted,
 } from './firebase';
 import { GlobalRealtimeStats, StoryRealtimeStats, RealtimeComment, Story, Chapter, Announcement, ReaderLetter, CommentReply, CollaboratorItem, UserProfile } from '../types';
 export type { ReaderLetter, RealtimeComment, CommentReply, GlobalRealtimeStats, StoryRealtimeStats, CollaboratorItem, UserProfile };
@@ -345,6 +346,11 @@ export const initServerRealtimeSync = () => {
           activeAnnouncementSubscribers.forEach((cb) => {
             try { cb(next); } catch {}
           });
+        } else if (msg.type === 'active_readers' && typeof msg.payload?.count === 'number') {
+          currentLiveActiveReaders = Math.max(1, msg.payload.count);
+          activeReaderSubscribers.forEach((cb) => {
+            try { cb(currentLiveActiveReaders); } catch {}
+          });
         }
       } catch {}
     };
@@ -357,6 +363,10 @@ export const initServerRealtimeSync = () => {
   // 3. Periodic fallback polling every 8 seconds
   setInterval(pullServerSync, 8000);
 };
+
+// Active readers subscribers
+const activeReaderSubscribers = new Set<(count: number) => void>();
+let currentLiveActiveReaders = 1;
 
 // Start sync immediately on client
 if (typeof window !== 'undefined') {
@@ -443,53 +453,28 @@ export const recordSiteVisit = async (): Promise<void> => {
 
 /**
  * Realtime Presence Heartbeat: Keeps track of actual active readers online right now.
- * Writes a timestamp to reader_presences and cleans up dead sessions.
+ * Zero Firestore writes: backed 100% by Server Events, active connections, and memory.
  */
 export const startActiveReaderHeartbeat = (onCountChange: (count: number) => void): (() => void) => {
-  const visitorId = getSessionVisitorId();
-  const presenceDocRef = doc(db, ACTIVE_PRESENCE_COLLECTION, visitorId);
+  activeReaderSubscribers.add(onCountChange);
+  // Send current cached active count immediately
+  onCountChange(Math.max(1, currentLiveActiveReaders));
 
-  // Send initial heartbeat
-  const beat = async () => {
-    try {
-      await setDoc(presenceDocRef, {
-        visitorId,
-        lastActive: Date.now(),
-        userAgent: typeof navigator !== 'undefined' ? navigator.userAgent.substring(0, 50) : 'web',
-      });
-    } catch {
-      // Ignore transient network errors
-    }
-  };
-
-  beat();
-  const beatInterval = setInterval(beat, 25000); // Pulse every 25s
-
-  // Listen to active readers within the last 70 seconds
-  const presencesQuery = query(collection(db, ACTIVE_PRESENCE_COLLECTION));
-  const unsubscribeListener = onSnapshot(
-    presencesQuery,
-    (snapshot) => {
-      const threshold = Date.now() - 75000;
-      let liveCount = 0;
-      snapshot.forEach((d) => {
-        const data = d.data();
-        if (data.lastActive && data.lastActive >= threshold) {
-          liveCount++;
-        }
-      });
-      // Return genuine active readers count (at least 1 for the current session)
-      onCountChange(Math.max(1, liveCount));
-    },
-    (err) => {
-      console.warn('Heartbeat listener warning:', err);
-      onCountChange(1);
-    }
-  );
+  // Query server for latest active readers count without writing to Firestore
+  fetchWithTimeout('/api/active-readers', {}, 2500)
+    .then((r) => r.json())
+    .then((data) => {
+      if (typeof data?.count === 'number') {
+        currentLiveActiveReaders = Math.max(1, data.count);
+        onCountChange(currentLiveActiveReaders);
+      }
+    })
+    .catch(() => {
+      onCountChange(Math.max(1, currentLiveActiveReaders));
+    });
 
   return () => {
-    clearInterval(beatInterval);
-    unsubscribeListener();
+    activeReaderSubscribers.delete(onCountChange);
   };
 };
 
@@ -509,19 +494,25 @@ export const subscribeToGlobalStats = (
         // Tự động làm sạch và khởi tạo lại nếu còn vướng số liệu ảo/thử nghiệm cũ (> 500 khi web chưa public)
         const isLegacySimulated = (!data.isRealData && ((data.totalVisits ?? 0) > 500 || (data.totalLikes ?? 0) > 500));
         if (isLegacySimulated) {
-          setDoc(
-            statsDocRef,
-            {
-              totalVisits: 0,
-              activeReaders: 1,
-              totalFollowers: 0,
-              totalComments: 0,
-              totalLikes: 0,
-              isRealData: true,
-              sanitizedAt: new Date().toISOString(),
-            },
-            { merge: true }
-          ).catch(() => {});
+          const hasAttempted = typeof sessionStorage !== 'undefined' && sessionStorage.getItem('mel_stats_sanitized');
+          if (!hasAttempted && !isFirestoreQuotaExhausted()) {
+            try {
+              if (typeof sessionStorage !== 'undefined') sessionStorage.setItem('mel_stats_sanitized', 'true');
+              setDoc(
+                statsDocRef,
+                {
+                  totalVisits: 0,
+                  activeReaders: 1,
+                  totalFollowers: 0,
+                  totalComments: 0,
+                  totalLikes: 0,
+                  isRealData: true,
+                  sanitizedAt: new Date().toISOString(),
+                },
+                { merge: true }
+              ).catch(() => {});
+            } catch {}
+          }
 
           callback({
             totalVisits: 0,
@@ -535,7 +526,7 @@ export const subscribeToGlobalStats = (
 
         callback({
           totalVisits: data.totalVisits ?? 0,
-          activeReaders: data.activeReaders ?? 1,
+          activeReaders: Math.max(1, currentLiveActiveReaders, data.activeReaders ?? 1),
           totalFollowers: data.totalFollowers ?? 0,
           totalComments: data.totalComments ?? 0,
           totalLikes: data.totalLikes ?? 0,
@@ -543,7 +534,7 @@ export const subscribeToGlobalStats = (
       } else {
         callback({
           totalVisits: 0,
-          activeReaders: 1,
+          activeReaders: Math.max(1, currentLiveActiveReaders),
           totalFollowers: 0,
           totalComments: 0,
           totalLikes: 0,
@@ -554,7 +545,7 @@ export const subscribeToGlobalStats = (
       console.warn('Global stats snapshot warning:', error);
       callback({
         totalVisits: 0,
-        activeReaders: 1,
+        activeReaders: Math.max(1, currentLiveActiveReaders),
         totalFollowers: 0,
         totalComments: 0,
         totalLikes: 0,

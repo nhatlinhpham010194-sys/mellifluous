@@ -1,5 +1,4 @@
-import { db } from '../lib/firebase';
-import { doc, getDoc, setDoc, onSnapshot } from 'firebase/firestore';
+import { db, doc, getDoc, setDoc, onSnapshot } from '../lib/firebase';
 
 export const DEFAULT_GENRES: string[] = [
   'Tất cả các thể loại mùa hè',
