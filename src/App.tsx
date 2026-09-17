@@ -285,7 +285,7 @@ export default function App() {
   const filteredStories = stories.filter((story) => {
     if (storyFilter === 'completed' && story.status !== 'completed') return false;
     if (storyFilter === 'ongoing' && story.status !== 'ongoing') return false;
-    if (selectedGenreFilter !== 'all' && !story.genre.includes(selectedGenreFilter)) return false;
+    if (selectedGenreFilter !== 'all' && !(Array.isArray(story.genre) && story.genre.includes(selectedGenreFilter))) return false;
     return true;
   });
 

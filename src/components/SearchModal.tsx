@@ -37,12 +37,12 @@ export const SearchModal: React.FC<SearchModalProps> = ({
   if (!isOpen) return null;
 
   const filtered = stories.filter((story) => {
-    const q = searchTerm.toLowerCase();
+    const q = (searchTerm || '').toLowerCase();
     return (
-      story.title.toLowerCase().includes(q) ||
-      story.author.toLowerCase().includes(q) ||
-      story.summary.toLowerCase().includes(q) ||
-      story.genre.some((g) => g.toLowerCase().includes(q))
+      (story.title && story.title.toLowerCase().includes(q)) ||
+      (story.author && story.author.toLowerCase().includes(q)) ||
+      (story.summary && story.summary.toLowerCase().includes(q)) ||
+      (Array.isArray(story.genre) && story.genre.some((g) => g && g.toLowerCase().includes(q)))
     );
   });
 

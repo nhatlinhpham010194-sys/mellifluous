@@ -221,12 +221,13 @@ export class BackgroundMusicEngine {
             const list: AudioTrack[] = [];
             snapshot.forEach((docSnap) => {
               const data = docSnap.data();
-              if (data && data.title && data.audioUrl) {
+              if (data && data.title) {
+                const validUrl = data.audioUrl || data.url || data.storageUrl || DEFAULT_TRACK_LIST[0].audioUrl;
                 list.push({
                   id: docSnap.id,
                   title: data.title,
                   artist: data.artist || 'Mellifluous',
-                  audioUrl: data.audioUrl,
+                  audioUrl: typeof validUrl === 'string' ? validUrl : DEFAULT_TRACK_LIST[0].audioUrl,
                   storagePath: data.storagePath,
                   coverUrl: data.coverUrl,
                   coverStoragePath: data.coverStoragePath,
@@ -263,7 +264,20 @@ export class BackgroundMusicEngine {
           if (snapshot.exists()) {
             const data = snapshot.data();
             if (Array.isArray(data.tracks) && data.tracks.length > 0) {
-              this.tracks = data.tracks;
+              this.tracks = data.tracks.map((t: any, index: number) => {
+                const fallbackAudio = DEFAULT_TRACK_LIST[index % DEFAULT_TRACK_LIST.length].audioUrl;
+                const trackUrl = t.audioUrl || t.url || t.storageUrl || fallbackAudio;
+                return {
+                  ...t,
+                  id: t.id || `track_${index}`,
+                  title: t.title || 'Giai điệu thư giãn',
+                  artist: t.artist || 'Mellifluous',
+                  audioUrl: typeof trackUrl === 'string' ? trackUrl : fallbackAudio,
+                  duration: t.duration || '03:30',
+                  durationSeconds: t.durationSeconds || parseDurationToSeconds(t.duration) || 195,
+                  mood: t.mood || 'Thư giãn',
+                };
+              });
               if (this.currentTrackIndex >= this.tracks.length) {
                 this.currentTrackIndex = 0;
               }
@@ -301,7 +315,10 @@ export class BackgroundMusicEngine {
 
   public getState(): AudioPlaybackState {
     const currentTrack = this.getCurrentTrack();
-    const isStorage = Boolean(currentTrack.storagePath || currentTrack.audioUrl.includes('firebasestorage.app'));
+    const isStorage = Boolean(
+      currentTrack?.storagePath ||
+      (typeof currentTrack?.audioUrl === 'string' && currentTrack.audioUrl.includes('firebasestorage.app'))
+    );
     return {
       isPlaying: this.isPlaying,
       isLoading: this.isLoading,
@@ -319,11 +336,22 @@ export class BackgroundMusicEngine {
   }
 
   public getCurrentTrack(): AudioTrack {
-    if (this.tracks.length === 0) {
+    if (!this.tracks || this.tracks.length === 0) {
       return DEFAULT_TRACK_LIST[0];
     }
     const idx = Math.max(0, Math.min(this.currentTrackIndex, this.tracks.length - 1));
-    return this.tracks[idx];
+    const track = this.tracks[idx] || DEFAULT_TRACK_LIST[0];
+    const fallbackAudio = DEFAULT_TRACK_LIST[idx % DEFAULT_TRACK_LIST.length].audioUrl;
+    return {
+      ...track,
+      id: track.id || `track_${idx}`,
+      title: track.title || 'Giai điệu thư giãn',
+      artist: track.artist || 'Mellifluous',
+      audioUrl: typeof track.audioUrl === 'string' && track.audioUrl ? track.audioUrl : fallbackAudio,
+      duration: track.duration || '03:30',
+      durationSeconds: track.durationSeconds || parseDurationToSeconds(track.duration) || 195,
+      mood: track.mood || 'Thư giãn',
+    };
   }
 
   public getTracks(): AudioTrack[] {
