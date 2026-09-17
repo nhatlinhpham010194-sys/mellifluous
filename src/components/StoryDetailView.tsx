@@ -222,8 +222,9 @@ export const StoryDetailView: React.FC<StoryDetailViewProps> = ({
   };
 
   const handleShare = () => {
+    const shareUrl = `${window.location.origin}${window.location.pathname}#/bai-viet/${story.id}`;
     if (navigator.clipboard) {
-      navigator.clipboard.writeText(window.location.href);
+      navigator.clipboard.writeText(shareUrl);
       setIsCopiedShare(true);
       setTimeout(() => setIsCopiedShare(false), 2200);
     }

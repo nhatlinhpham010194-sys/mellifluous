@@ -1,16 +1,18 @@
 import React, { useState, useEffect } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { Story } from '../types';
-import { BookOpen, Eye, Heart, Sparkles, Key, CheckCircle, Clock, Star } from 'lucide-react';
+import { BookOpen, Eye, Heart, Sparkles, Key, CheckCircle, Clock, Star, Share2 } from 'lucide-react';
 import { getStoryChapters } from '../data/mockData';
 import { subscribeToStoryStats, subscribeToStoryChapters, toggleStoryLike, recordStoryView } from '../lib/realtimeService';
 
 interface StoryCardProps {
   story: Story;
-  onOpenStory: (storyId: string) => void;
-  onSelectChapter: (storyId: string, chapterNumber: number) => void;
+  onOpenStory?: (storyId: string) => void;
+  onSelectChapter?: (storyId: string, chapterNumber: number) => void;
 }
 
 export const StoryCard: React.FC<StoryCardProps> = ({ story, onOpenStory, onSelectChapter }) => {
+  const navigate = useNavigate();
   const isCompleted = story.status === 'completed';
 
   const [realtimeViews, setRealtimeViews] = useState<number>(story.views || 0);
@@ -71,9 +73,28 @@ export const StoryCard: React.FC<StoryCardProps> = ({ story, onOpenStory, onSele
     toggleStoryLike(story.id, nextState);
   };
 
+  const [isCopied, setIsCopied] = useState<boolean>(false);
+
+  const handleCopyLink = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const shareUrl = `${window.location.origin}${window.location.pathname}#/bai-viet/${story.id}`;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(shareUrl).then(() => {
+        setIsCopied(true);
+        setTimeout(() => setIsCopied(false), 2000);
+      });
+    } else {
+      setIsCopied(true);
+      setTimeout(() => setIsCopied(false), 2000);
+    }
+  };
+
   const handleCardClick = () => {
     recordStoryView(story.id);
-    onOpenStory(story.id);
+    if (onOpenStory) {
+      onOpenStory(story.id);
+    }
+    navigate(`/bai-viet/${story.id}`);
   };
 
   return (
@@ -83,14 +104,31 @@ export const StoryCard: React.FC<StoryCardProps> = ({ story, onOpenStory, onSele
     >
       {/* Top Banner Image with Overlay */}
       <div className="relative h-48 w-full overflow-hidden bg-stone-100 dark:bg-stone-900">
-        <img
-          src={story.coverImage}
-          alt={story.title}
-          referrerPolicy="no-referrer"
-          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700 ease-out cursor-pointer"
-          onClick={handleCardClick}
-        />
+        <Link
+          to={`/bai-viet/${story.id}`}
+          onClick={() => recordStoryView(story.id)}
+          className="block w-full h-full"
+          title={`Xem chi tiết ${story.title}`}
+        >
+          <img
+            src={story.coverImage}
+            alt={story.title}
+            referrerPolicy="no-referrer"
+            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700 ease-out cursor-pointer"
+          />
+        </Link>
         <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/30 to-transparent pointer-events-none" />
+
+        {/* Share / Copy Link Button on Top Right */}
+        <button
+          type="button"
+          onClick={handleCopyLink}
+          title="Sao chép link chia sẻ truyện"
+          className="absolute top-3 right-3 z-10 p-1.5 rounded-full bg-black/50 hover:bg-black/80 text-white backdrop-blur-md transition-colors cursor-pointer text-xs flex items-center gap-1"
+        >
+          <Share2 className="w-3.5 h-3.5" />
+          {isCopied && <span className="text-[10px] font-sans pr-1">Đã chép link!</span>}
+        </button>
 
         {/* Status Badge */}
         <div className="absolute top-3 left-3 flex flex-wrap items-center gap-1.5 z-10">
@@ -177,11 +215,14 @@ export const StoryCard: React.FC<StoryCardProps> = ({ story, onOpenStory, onSele
           </div>
 
           {/* Title */}
-          <h3
-            onClick={handleCardClick}
-            className="font-serif text-lg sm:text-xl font-bold text-stone-800 dark:text-stone-100 group-hover:text-pink-600 dark:group-hover:text-pink-300 transition-colors cursor-pointer line-clamp-1"
-          >
-            {story.title}
+          <h3 className="font-serif text-lg sm:text-xl font-bold text-stone-800 dark:text-stone-100 group-hover:text-pink-600 dark:group-hover:text-pink-300 transition-colors cursor-pointer line-clamp-1">
+            <Link
+              to={`/bai-viet/${story.id}`}
+              onClick={() => recordStoryView(story.id)}
+              className="hover:underline"
+            >
+              {story.title}
+            </Link>
           </h3>
 
           {/* Author & Translator */}
@@ -214,24 +255,31 @@ export const StoryCard: React.FC<StoryCardProps> = ({ story, onOpenStory, onSele
           </div>
 
           <div className="flex items-center gap-2">
-            <button
-              type="button"
+            <Link
+              to={`/bai-viet/${story.id}/chuong/1`}
               onClick={() => {
                 recordStoryView(story.id);
-                onSelectChapter(story.id, 1);
+                if (onSelectChapter) {
+                  onSelectChapter(story.id, 1);
+                }
               }}
-              className="px-3 py-1.5 rounded-xl bg-pink-50 hover:bg-pink-100 text-pink-700 dark:bg-stone-700 dark:hover:bg-pink-950/60 dark:text-pink-300 text-xs font-medium transition-colors cursor-pointer"
+              className="px-3 py-1.5 rounded-xl bg-pink-50 hover:bg-pink-100 text-pink-700 dark:bg-stone-700 dark:hover:bg-pink-950/60 dark:text-pink-300 text-xs font-medium transition-colors cursor-pointer inline-flex items-center"
             >
               Đọc C.1
-            </button>
-            <button
-              type="button"
-              onClick={handleCardClick}
+            </Link>
+            <Link
+              to={`/bai-viet/${story.id}`}
+              onClick={() => {
+                recordStoryView(story.id);
+                if (onOpenStory) {
+                  onOpenStory(story.id);
+                }
+              }}
               className="px-3.5 py-1.5 rounded-xl bg-pink-500 hover:bg-pink-600 text-white text-xs font-medium shadow-xs transition-colors flex items-center gap-1 cursor-pointer"
             >
               <BookOpen className="w-3.5 h-3.5" />
               <span>Văn án & Mục lục</span>
-            </button>
+            </Link>
           </div>
         </div>
       </div>

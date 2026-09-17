@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { Routes, Route, useNavigate, useLocation, Navigate, useParams } from 'react-router-dom';
 import { ActiveTab, Story, Announcement, RecentUpdate } from './types';
 import { STORIES, ANNOUNCEMENTS, RECENT_UPDATES, getStoryChapters } from './data/mockData';
 import { subscribeToPublishedStories, subscribeToAnnouncements, subscribeToAllChapters } from './lib/realtimeService';
@@ -10,6 +11,7 @@ import { Sidebar } from './components/Sidebar';
 import { StoryCard } from './components/StoryCard';
 import { StoryModal } from './components/StoryModal';
 import { ReaderView } from './components/ReaderView';
+import { StoryDetailPage } from './components/StoryDetailPage';
 import { PasswordPage } from './components/PasswordPage';
 import { OtherSections } from './components/OtherSections';
 import { AboutView } from './components/AboutView';
@@ -24,6 +26,16 @@ import { Footer } from './components/Footer';
 import { BackgroundMusicBar } from './components/BackgroundMusicBar';
 import { SakuraPetals } from './components/SakuraPetals';
 import { Clock, Sparkles, CheckCircle2, ArrowLeft, MailOpen, X, ArrowUp, ChevronUp, ChevronDown } from 'lucide-react';
+
+const StoryDetailRedirect: React.FC = () => {
+  const { id } = useParams<{ id: string }>();
+  return <Navigate to={`/bai-viet/${id}`} replace />;
+};
+
+const StoryChapterRedirect: React.FC = () => {
+  const { id, chapterNumber } = useParams<{ id: string; chapterNumber: string }>();
+  return <Navigate to={`/bai-viet/${id}/chuong/${chapterNumber}`} replace />;
+};
 
 const formatRelativeTime = (timeStr?: string): string => {
   if (!timeStr) return 'Vừa đăng';
@@ -45,7 +57,19 @@ const formatRelativeTime = (timeStr?: string): string => {
 };
 
 export default function App() {
-  const [currentTab, setCurrentTab] = useState<ActiveTab>('home');
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  const currentTab: ActiveTab = useMemo(() => {
+    const path = location.pathname;
+    if (path.startsWith('/da-hoan')) return 'completed';
+    if (path.startsWith('/dang-ra')) return 'ongoing';
+    if (path.startsWith('/pass')) return 'password';
+    if (path.startsWith('/khac')) return 'other';
+    if (path.startsWith('/gioi-thieu')) return 'about';
+    return 'home';
+  }, [location.pathname]);
+
   const [activeLetter, setActiveLetter] = useState<LetterTab | null>(null);
   const [storyFilter, setStoryFilter] = useState<'all' | 'completed' | 'ongoing'>('all');
   const [selectedGenreFilter, setSelectedGenreFilter] = useState<string>('all');
@@ -181,9 +205,19 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'instant' });
     setReadingChapterInfo(null);
     setModalStoryId(null);
-    setCurrentTab(tab);
     if (tab === 'home') {
       setSelectedGenreFilter('all');
+      navigate('/');
+    } else if (tab === 'completed') {
+      navigate('/da-hoan');
+    } else if (tab === 'ongoing') {
+      navigate('/dang-ra');
+    } else if (tab === 'password') {
+      navigate('/pass');
+    } else if (tab === 'other') {
+      navigate('/khac');
+    } else if (tab === 'about') {
+      navigate('/gioi-thieu');
     }
   };
 
@@ -194,8 +228,8 @@ export default function App() {
    * Smoothly scrolls to the top of that letter's content from the first item.
    */
   const handleLetterSelect = (tab: LetterTab) => {
-    if (currentTab !== 'home') {
-      setCurrentTab('home');
+    if (location.pathname !== '/') {
+      navigate('/');
     }
     // Toggle off: If clicking the active envelope again, hide it!
     if (activeLetter === tab) {
@@ -227,16 +261,14 @@ export default function App() {
     // to preserve reading position and prevent any jarring viewport jump.
   };
 
-  // Open story popup modal
+  // Open story page with URL route /bai-viet/:id
   const handleOpenStoryModal = (storyId: string) => {
-    setModalStoryId(storyId);
+    navigate(`/bai-viet/${storyId}`);
   };
 
-  // Open reader view cleanly at the top of the chapter
+  // Open reader view cleanly at the top of the chapter via route /bai-viet/:id/chuong/:chapterNumber
   const handleOpenChapter = (storyId: string, chapterNumber: number) => {
-    setModalStoryId(null);
-    setReadingChapterInfo({ storyId, chapterNumber });
-    window.scrollTo({ top: 0, behavior: 'instant' });
+    navigate(`/bai-viet/${storyId}/chuong/${chapterNumber}`);
   };
 
   const handleBackFromReader = () => {
@@ -333,34 +365,18 @@ export default function App() {
       />
 
       {/* Main Content Area with top padding to clear fixed navbar */}
-      <main
-        className={`flex-1 max-w-7xl mx-auto px-2.5 sm:px-6 lg:px-8 pb-12 w-full ${
-          readingStory && readingChapter
-            ? 'pt-16 sm:pt-[4.75rem] lg:pt-20'
-            : 'pt-20 sm:pt-24'
-        }`}
-      >
-        {/* CASE 1: READING A CHAPTER */}
-        {readingStory && readingChapter ? (
-          <ReaderView
-            story={readingStory}
-            chapter={readingChapter}
-            allChapters={readingChapters}
-            onBack={handleBackFromReader}
-            onSelectChapter={(num) =>
-              setReadingChapterInfo({ storyId: readingStory.id, chapterNumber: num })
-            }
-            onGoToPasswordGuide={() => {
-              setReadingChapterInfo(null);
-              handleNavSelect('password');
-            }}
-            onOpenStoryDetail={() => setModalStoryId(readingStory.id)}
-          />
-        ) : (
-          /* CASE 2: DEDICATED PAGE VIEWS ACCORDING TO NAVBAR SELECTION */
-          <div>
-            {/* PAGE 1: DEDICATED COMPLETED STORIES PAGE */}
-            {currentTab === 'completed' && (
+      <main className="flex-1 max-w-7xl mx-auto px-2.5 sm:px-6 lg:px-8 pb-12 w-full pt-20 sm:pt-24">
+        <Routes>
+          {/* DEDICATED STORY & CHAPTER ROUTES FOR DIRECT SHARING AND DEEP LINKING */}
+          <Route path="/bai-viet/:id" element={<StoryDetailPage stories={stories} />} />
+          <Route path="/bai-viet/:id/chuong/:chapterNumber" element={<StoryDetailPage stories={stories} />} />
+          <Route path="/truyen/:id" element={<StoryDetailRedirect />} />
+          <Route path="/truyen/:id/chuong/:chapterNumber" element={<StoryChapterRedirect />} />
+
+          {/* PAGE 1: DEDICATED COMPLETED STORIES PAGE */}
+          <Route
+            path="/da-hoan"
+            element={
               <CompletedStoriesView
                 stories={stories}
                 announcements={announcements}
@@ -369,10 +385,13 @@ export default function App() {
                 onOpenStory={handleOpenStoryModal}
                 onSelectChapter={handleOpenChapter}
               />
-            )}
+            }
+          />
 
-            {/* PAGE 2: DEDICATED ONGOING STORIES PAGE */}
-            {currentTab === 'ongoing' && (
+          {/* PAGE 2: DEDICATED ONGOING STORIES PAGE */}
+          <Route
+            path="/dang-ra"
+            element={
               <OngoingStoriesView
                 stories={stories}
                 announcements={announcements}
@@ -381,10 +400,13 @@ export default function App() {
                 onOpenStory={handleOpenStoryModal}
                 onSelectChapter={handleOpenChapter}
               />
-            )}
+            }
+          />
 
-            {/* PAGE 3: DEDICATED PASSWORD GUIDE PAGE */}
-            {currentTab === 'password' && (
+          {/* PAGE 3: DEDICATED PASSWORD GUIDE PAGE */}
+          <Route
+            path="/pass"
+            element={
               <div className="space-y-6 animate-in fade-in duration-300">
                 {/* Breadcrumb Navigation */}
                 <nav className="flex items-center gap-2 text-xs text-stone-500 dark:text-stone-400">
@@ -418,10 +440,13 @@ export default function App() {
                   </div>
                 </div>
               </div>
-            )}
+            }
+          />
 
-            {/* PAGE 4: DEDICATED OTHER SECTIONS PAGE (CONFESSION & MUSIC) */}
-            {currentTab === 'other' && (
+          {/* PAGE 4: DEDICATED OTHER SECTIONS PAGE (CONFESSION & MUSIC) */}
+          <Route
+            path="/khac"
+            element={
               <div className="space-y-6 animate-in fade-in duration-300">
                 {/* Breadcrumb Navigation */}
                 <nav className="flex items-center gap-2 text-xs text-stone-500 dark:text-stone-400">
@@ -455,10 +480,13 @@ export default function App() {
                   </div>
                 </div>
               </div>
-            )}
+            }
+          />
 
-            {/* PAGE 5: DEDICATED ABOUT MELLIFLUOUS PAGE */}
-            {currentTab === 'about' && (
+          {/* PAGE 5: DEDICATED ABOUT MELLIFLUOUS PAGE */}
+          <Route
+            path="/gioi-thieu"
+            element={
               <div className="space-y-6 animate-in fade-in duration-300">
                 {/* Breadcrumb Navigation */}
                 <nav className="flex items-center gap-2 text-xs text-stone-500 dark:text-stone-400">
@@ -492,10 +520,13 @@ export default function App() {
                   </div>
                 </div>
               </div>
-            )}
+            }
+          />
 
-            {/* PAGE 0: HOME PAGE (OVERVIEW WITH HERO, 4 EXCLUSIVE LETTERS) */}
-            {currentTab === 'home' && (
+          {/* PAGE 0: HOME PAGE (OVERVIEW WITH HERO, 4 EXCLUSIVE LETTERS) */}
+          <Route
+            path="/"
+            element={
               <div className="space-y-10 sm:space-y-12">
                 {/* 1. Hero Intro Banner */}
                 <HeroIntro
@@ -779,9 +810,12 @@ export default function App() {
                   </div>
                 </div>
               </div>
-            )}
-          </div>
-        )}
+            }
+          />
+
+          {/* FALLBACK REDIRECT TO HOME */}
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
       </main>
 
       {/* STORY DETAIL MODAL */}
