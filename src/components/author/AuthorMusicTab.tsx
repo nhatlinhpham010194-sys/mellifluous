@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Music,
   Plus,
@@ -6,37 +6,67 @@ import {
   Play,
   Pause,
   RotateCcw,
-  CheckCircle2,
-  AlertCircle,
   Edit2,
   Save,
   X,
   Sparkles,
-  UploadCloud,
   FileAudio,
   Image as ImageIcon,
-  HardDrive,
-  Cloud,
-  Check,
-  Loader2,
-  Info,
+  FileMusic,
   Link as LinkIcon,
+  Info,
+  Check,
 } from 'lucide-react';
 import {
   bgmEngine,
   AudioTrack,
   formatSecondsToTime,
+  resolveAudioUrl,
 } from '../../utils/audioPlayer';
-import {
-  detectAudioDuration,
-  uploadAudioFileToStorage,
-  uploadCoverImageToStorage,
-  formatBytes,
-} from '../../utils/audioStorage';
+import { parseDurationToSeconds } from '../../utils/audioStorage';
 
 interface AuthorMusicTabProps {
   onFeedback: (type: 'success' | 'error', text: string) => void;
 }
+
+// Preset tracks available in public/music/ for 1-click selection
+const STATIC_PRESETS = [
+  {
+    title: 'Giai Điệu Hạ Êm Đềm',
+    artist: 'Mellifluous Piano',
+    filePath: 'music/giai-dieu-ha.mp3',
+    duration: '03:15',
+    mood: 'Gió hạ thanh bình',
+  },
+  {
+    title: 'Ký Ức Mưa Đầu Hạ',
+    artist: 'Mellifluous Serenity',
+    filePath: 'music/ky-uc-mua.mp3',
+    duration: '02:40',
+    mood: 'Mưa rơi êm dịu',
+  },
+  {
+    title: 'Chuông Gió Hoa Anh Đào',
+    artist: 'Mellifluous Wind',
+    filePath: 'music/chuong-gio.mp3',
+    duration: '02:18',
+    mood: 'Thanh thản sâu lắng',
+  },
+  {
+    title: 'Bình Minh Trên Đồi Trà',
+    artist: 'Mellifluous Nature',
+    filePath: 'music/binh-minh.mp3',
+    duration: '03:05',
+    mood: 'Dịu dàng sớm mai',
+  },
+  {
+    title: 'Giai Điệu Thư Giãn Mẫu',
+    artist: 'Mellifluous Piano',
+    filePath: 'music/ten-bai-hat.mp3',
+    duration: '03:30',
+    mood: 'Đọc truyện thư giãn',
+  },
+];
 
 export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) => {
   const [tracks, setTracks] = useState<AudioTrack[]>(() => bgmEngine.getTracks());
@@ -45,41 +75,27 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [duration, setDuration] = useState<number>(195);
 
-  // Upload method: 'file' (Firebase Storage) or 'url' (Direct streaming link)
-  const [uploadMethod, setUploadMethod] = useState<'file' | 'url'>('file');
-
-  // File state
-  const [audioFile, setAudioFile] = useState<File | null>(null);
-  const [audioFileSizeText, setAudioFileSizeText] = useState<string>('');
-  const [coverFile, setCoverFile] = useState<File | null>(null);
-  const [coverPreviewUrl, setCoverPreviewUrl] = useState<string | null>(null);
-
-  // Form fields
+  // Form fields for adding new track
   const [title, setTitle] = useState('');
   const [artist, setArtist] = useState('');
-  const [audioUrlInput, setAudioUrlInput] = useState('');
+  const [filePath, setFilePath] = useState('');
+  const [coverUrl, setCoverUrl] = useState('');
   const [mood, setMood] = useState('');
   const [durationInput, setDurationInput] = useState('03:30');
-  const [durationSeconds, setDurationSeconds] = useState(210);
-
-  // Upload progress states
-  const [isUploading, setIsUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [uploadStage, setUploadStage] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
 
   // Edit track states
   const [editingTrackId, setEditingTrackId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState('');
   const [editArtist, setEditArtist] = useState('');
+  const [editFilePath, setEditFilePath] = useState('');
+  const [editCoverUrl, setEditCoverUrl] = useState('');
   const [editMood, setEditMood] = useState('');
   const [editDuration, setEditDuration] = useState('03:30');
 
   // Seek bar state
   const [isSeeking, setIsSeeking] = useState(false);
   const [seekValue, setSeekValue] = useState(0);
-
-  const audioInputRef = useRef<HTMLInputElement>(null);
-  const coverInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const unsubscribe = bgmEngine.subscribe((state) => {
@@ -94,168 +110,63 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
     return unsubscribe;
   }, [isSeeking]);
 
-  // Clean up object URLs
-  useEffect(() => {
-    return () => {
-      if (coverPreviewUrl && coverPreviewUrl.startsWith('blob:')) {
-        URL.revokeObjectURL(coverPreviewUrl);
-      }
-    };
-  }, [coverPreviewUrl]);
-
-  // Handle Audio File Selection
-  const handleAudioFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    // Check supported types
-    const validExtensions = ['.mp3', '.wav', '.m4a', '.ogg', '.flac'];
-    const lowerName = file.name.toLowerCase();
-    const isValid = validExtensions.some((ext) => lowerName.endsWith(ext)) || file.type.startsWith('audio/');
-
-    if (!isValid) {
-      onFeedback('error', 'Vui lòng chọn định dạng file âm thanh hợp lệ (.mp3, .wav, .m4a, .ogg).');
-      return;
-    }
-
-    setAudioFile(file);
-    setAudioFileSizeText(formatBytes(file.size));
-
-    // Auto-fill song title if empty
-    if (!title.trim()) {
-      const baseName = file.name.replace(/\.[^/.]+$/, '').replace(/[_-]/g, ' ');
-      setTitle(baseName);
-    }
-
-    // Auto-detect duration from file
-    try {
-      const detected = await detectAudioDuration(file);
-      setDurationInput(detected.durationFormatted);
-      setDurationSeconds(detected.durationSeconds);
-    } catch {
-      setDurationInput('03:30');
-      setDurationSeconds(210);
-    }
+  // Apply a preset from public/music/
+  const handleSelectPreset = (preset: typeof STATIC_PRESETS[0]) => {
+    setFilePath(preset.filePath);
+    if (!title.trim()) setTitle(preset.title);
+    if (!artist.trim()) setArtist(preset.artist);
+    if (!mood.trim()) setMood(preset.mood);
+    setDurationInput(preset.duration);
   };
 
-  // Handle Cover Art Selection
-  const handleCoverFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (!file.type.startsWith('image/')) {
-      onFeedback('error', 'Vui lòng chọn file hình ảnh hợp lệ (.jpg, .png, .webp).');
-      return;
-    }
-
-    if (coverPreviewUrl && coverPreviewUrl.startsWith('blob:')) {
-      URL.revokeObjectURL(coverPreviewUrl);
-    }
-
-    setCoverFile(file);
-    setCoverPreviewUrl(URL.createObjectURL(file));
-  };
-
-  const handleRemoveSelectedAudio = () => {
-    setAudioFile(null);
-    setAudioFileSizeText('');
-    if (audioInputRef.current) audioInputRef.current.value = '';
-  };
-
-  const handleRemoveSelectedCover = () => {
-    if (coverPreviewUrl && coverPreviewUrl.startsWith('blob:')) {
-      URL.revokeObjectURL(coverPreviewUrl);
-    }
-    setCoverFile(null);
-    setCoverPreviewUrl(null);
-    if (coverInputRef.current) coverInputRef.current.value = '';
-  };
-
-  // Submit Handler: Upload to Firebase Storage & Save to Firestore
+  // Submit Handler: Save track path & metadata to Firestore music_tracks & site_stats
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!title.trim()) {
+    const trimmedTitle = title.trim();
+    if (!trimmedTitle) {
       onFeedback('error', 'Vui lòng nhập tên bài hát / tác phẩm.');
       return;
     }
 
-    if (uploadMethod === 'file' && !audioFile) {
-      onFeedback('error', 'Vui lòng chọn file âm thanh (.mp3, .wav) để tải lên Firebase Storage.');
+    const trimmedPath = filePath.trim();
+    if (!trimmedPath) {
+      onFeedback('error', 'Vui lòng nhập đường dẫn file tĩnh (ví dụ: music/ten-bai-hat.mp3) hoặc link âm thanh.');
       return;
     }
 
-    if (uploadMethod === 'url' && !audioUrlInput.trim()) {
-      onFeedback('error', 'Vui lòng nhập đường dẫn URL tệp âm thanh trực tiếp.');
-      return;
-    }
+    // Strip leading slashes to prevent hard-coded leading slash for GitHub Pages compatibility
+    const cleanAudioUrl = trimmedPath.replace(/^\/+/, '');
+    const cleanCoverUrl = coverUrl.trim().replace(/^\/+/, '');
+    const seconds = parseDurationToSeconds(durationInput.trim());
 
-    setIsUploading(true);
-    setUploadProgress(0);
-    setUploadStage('Chuẩn bị tải lên...');
-
+    setIsSaving(true);
     try {
-      let finalAudioUrl = '';
-      let storagePath: string | undefined = undefined;
-      let fileSize: number | undefined = undefined;
-      let coverUrl: string | undefined = undefined;
-      let coverStoragePath: string | undefined = undefined;
-
-      // 1. Upload audio file to Firebase Storage
-      if (uploadMethod === 'file' && audioFile) {
-        setUploadStage('Đang tải tệp nhạc lên Firebase Storage...');
-        const audioUploadResult = await uploadAudioFileToStorage(audioFile, (pct) => {
-          setUploadProgress(pct);
-        });
-        finalAudioUrl = audioUploadResult.downloadUrl;
-        storagePath = audioUploadResult.storagePath;
-        fileSize = audioUploadResult.fileSize;
-      } else {
-        finalAudioUrl = audioUrlInput.trim();
-      }
-
-      // 2. Upload cover image to Firebase Storage if provided
-      if (coverFile) {
-        setUploadStage('Đang tải ảnh bìa lên...');
-        const coverUploadResult = await uploadCoverImageToStorage(coverFile);
-        coverUrl = coverUploadResult.downloadUrl;
-        coverStoragePath = coverUploadResult.storagePath;
-      }
-
-      // 3. Save metadata to Firestore and add to local playlist
-      setUploadStage('Đang lưu thông tin bài hát vào cơ sở dữ liệu...');
       await bgmEngine.addTrack({
-        title: title.trim(),
+        title: trimmedTitle,
         artist: artist.trim() || 'Mellifluous Piano',
-        audioUrl: finalAudioUrl,
-        storagePath,
-        coverUrl,
-        coverStoragePath,
+        audioUrl: cleanAudioUrl,
+        coverUrl: cleanCoverUrl || undefined,
         duration: durationInput.trim() || '03:30',
-        durationSeconds: durationSeconds || 210,
+        durationSeconds: seconds,
         mood: mood.trim() || 'Giai điệu thư giãn',
-        fileSize,
         addedBy: 'Tác giả / BQT',
       });
 
-      onFeedback('success', `Đã tải lên và lưu bài hát "${title.trim()}" thành công!`);
+      onFeedback('success', `Đã thêm bài hát "${trimmedTitle}" vào danh sách phát thành công!`);
 
       // Reset form
       setTitle('');
       setArtist('');
+      setFilePath('');
+      setCoverUrl('');
       setMood('');
-      setAudioUrlInput('');
       setDurationInput('03:30');
-      setDurationSeconds(210);
-      handleRemoveSelectedAudio();
-      handleRemoveSelectedCover();
     } catch (err: any) {
-      console.error('Add track error:', err);
-      onFeedback('error', `Lỗi khi tải lên bài hát: ${err.message || 'Vui lòng kiểm tra lại kết nối mạng.'}`);
+      console.error('Save track error:', err);
+      onFeedback('error', `Lỗi khi lưu bài hát: ${err.message || 'Vui lòng kiểm tra lại kết nối mạng.'}`);
     } finally {
-      setIsUploading(false);
-      setUploadProgress(0);
-      setUploadStage('');
+      setIsSaving(false);
     }
   };
 
@@ -263,6 +174,8 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
     setEditingTrackId(t.id);
     setEditTitle(t.title);
     setEditArtist(t.artist);
+    setEditFilePath(t.audioUrl);
+    setEditCoverUrl(t.coverUrl || '');
     setEditMood(t.mood || '');
     setEditDuration(t.duration || '03:30');
   };
@@ -272,13 +185,24 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
       onFeedback('error', 'Tên bài hát không được để trống.');
       return;
     }
+    if (!editFilePath.trim()) {
+      onFeedback('error', 'Đường dẫn file bài hát không được để trống.');
+      return;
+    }
+
+    const cleanAudioUrl = editFilePath.trim().replace(/^\/+/, '');
+    const cleanCoverUrl = editCoverUrl.trim().replace(/^\/+/, '');
+    const seconds = parseDurationToSeconds(editDuration.trim());
 
     try {
       await bgmEngine.updateTrack(trackId, {
         title: editTitle.trim(),
         artist: editArtist.trim() || 'Mellifluous',
+        audioUrl: cleanAudioUrl,
+        coverUrl: cleanCoverUrl || undefined,
         mood: editMood.trim() || undefined,
-        duration: editDuration.trim() || undefined,
+        duration: editDuration.trim() || '03:30',
+        durationSeconds: seconds,
       });
       setEditingTrackId(null);
       onFeedback('success', 'Đã cập nhật thông tin bài hát thành công!');
@@ -296,7 +220,7 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
     try {
       const ok = await bgmEngine.removeTrack(trackId);
       if (ok) {
-        onFeedback('success', `Đã xóa bài hát "${trackTitle}" và giải phóng bộ nhớ.`);
+        onFeedback('success', `Đã xóa bài hát "${trackTitle}" khỏi danh sách phát.`);
       }
     } catch {
       onFeedback('error', 'Không thể xóa bài hát này.');
@@ -321,17 +245,17 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-pink-500/10 dark:bg-pink-950/60 text-pink-600 dark:text-pink-400 flex items-center justify-center shrink-0">
-              <Cloud className="w-5 h-5" />
+              <FileMusic className="w-5 h-5" />
             </div>
             <div>
               <h3 className="font-serif text-base sm:text-lg font-bold text-stone-900 dark:text-stone-100 flex items-center gap-2">
-                <span>Quản Lý Nhạc Nền & Firebase Storage</span>
+                <span>Quản Lý Nhạc Nền (File Tĩnh Repo & URL)</span>
                 <span className="text-xs px-2 py-0.5 rounded-full bg-pink-100 text-pink-800 dark:bg-pink-950/80 dark:text-pink-300 font-sans font-medium">
                   {tracks.length} bài hát
                 </span>
               </h3>
               <p className="text-xs text-stone-600 dark:text-stone-300 font-sans mt-0.5">
-                Tất cả bài hát được lưu trữ trực tiếp trên Firebase Storage và phát qua trình phát HTML5 duy nhất, hoạt động mượt mà không bị phụ thuộc iframe.
+                Các bài hát được đặt dưới dạng file tĩnh trong thư mục <code className="px-1 py-0.5 rounded bg-pink-100 dark:bg-stone-700 font-mono text-[11px] text-pink-700 dark:text-pink-300">public/music/</code> hoặc link trực tiếp, tự động ghép nối với <code className="px-1 py-0.5 rounded bg-pink-100 dark:bg-stone-700 font-mono text-[11px] text-pink-700 dark:text-pink-300">BASE_URL</code> tương thích GitHub Pages.
               </p>
             </div>
           </div>
@@ -368,7 +292,7 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
             <div className="w-10 h-10 rounded-xl overflow-hidden bg-pink-100 dark:bg-stone-700 shrink-0 flex items-center justify-center border border-pink-200 dark:border-stone-600">
               {currentTrack.coverUrl ? (
                 <img
-                  src={currentTrack.coverUrl}
+                  src={resolveAudioUrl(currentTrack.coverUrl)}
                   alt={currentTrack.title}
                   className="w-full h-full object-cover"
                   referrerPolicy="no-referrer"
@@ -383,14 +307,15 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
                 <span className="text-xs font-bold text-stone-900 dark:text-stone-100 truncate">
                   {currentTrack.title}
                 </span>
-                {currentTrack.storagePath && (
-                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-pink-50 dark:bg-pink-950/60 text-pink-700 dark:text-pink-300 font-mono font-medium uppercase">
-                    Firebase Cloud
-                  </span>
-                )}
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-pink-50 dark:bg-pink-950/60 text-pink-700 dark:text-pink-300 font-mono font-medium">
+                  {currentTrack.audioUrl.startsWith('http') ? 'Direct URL' : 'File tĩnh repo'}
+                </span>
               </div>
               <p className="text-[11px] text-stone-500 dark:text-stone-400 truncate">
                 {currentTrack.artist} • {currentTrack.mood || 'Thư giãn'}
+              </p>
+              <p className="text-[10px] text-stone-400 font-mono truncate">
+                {currentTrack.audioUrl}
               </p>
             </div>
           </div>
@@ -441,171 +366,69 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
         </div>
       </div>
 
-      {/* Upload Music Form */}
+      {/* Add Track Form */}
       <div className="p-5 sm:p-6 rounded-2xl bg-white dark:bg-stone-850 border border-stone-200 dark:border-stone-700 shadow-2xs space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-stone-100 dark:border-stone-700 pb-3">
-          <h4 className="text-xs font-bold text-stone-900 dark:text-stone-100 uppercase tracking-wider flex items-center gap-2">
-            <UploadCloud className="w-4 h-4 text-pink-500" />
-            <span>Tải Nhạc Lên Danh Sách Phát</span>
-          </h4>
+          <div>
+            <h4 className="text-xs font-bold text-stone-900 dark:text-stone-100 uppercase tracking-wider flex items-center gap-2">
+              <Plus className="w-4 h-4 text-pink-500" />
+              <span>Thêm Bài Hát Vào Danh Sách Phát</span>
+            </h4>
+            <p className="text-[11px] text-stone-500 dark:text-stone-400 mt-0.5">
+              Nhập thông tin bài hát và đường dẫn file trong repo hoặc link trực tiếp, dữ liệu lưu trữ vào collection Firestore <code className="font-mono text-[10px] text-pink-600 dark:text-pink-300">music_tracks</code>.
+            </p>
+          </div>
+        </div>
 
-          {/* Mode Switcher */}
-          <div className="inline-flex rounded-xl bg-stone-100 dark:bg-stone-800 p-1 text-xs">
-            <button
-              type="button"
-              onClick={() => setUploadMethod('file')}
-              className={`px-3 py-1 rounded-lg font-medium transition-all cursor-pointer flex items-center gap-1.5 ${
-                uploadMethod === 'file'
-                  ? 'bg-white dark:bg-stone-700 text-pink-600 dark:text-pink-300 shadow-xs'
-                  : 'text-stone-500 hover:text-stone-900 dark:text-stone-400'
-              }`}
-            >
-              <HardDrive className="w-3.5 h-3.5" />
-              <span>Tải file trực tiếp (Firebase)</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setUploadMethod('url')}
-              className={`px-3 py-1 rounded-lg font-medium transition-all cursor-pointer flex items-center gap-1.5 ${
-                uploadMethod === 'url'
-                  ? 'bg-white dark:bg-stone-700 text-pink-600 dark:text-pink-300 shadow-xs'
-                  : 'text-stone-500 hover:text-stone-900 dark:text-stone-400'
-              }`}
-            >
-              <LinkIcon className="w-3.5 h-3.5" />
-              <span>Dán đường dẫn audio</span>
-            </button>
+        {/* Static Presets Quick Chips */}
+        <div className="space-y-1.5 p-3 rounded-xl bg-stone-50/70 dark:bg-stone-900/50 border border-stone-200/80 dark:border-stone-700/80">
+          <div className="flex items-center gap-1.5 text-[11px] font-semibold text-stone-700 dark:text-stone-300">
+            <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+            <span>Gợi ý file có sẵn trong thư mục public/music/ (bấm để điền nhanh):</span>
+          </div>
+          <div className="flex flex-wrap gap-1.5 pt-1">
+            {STATIC_PRESETS.map((p) => {
+              const isMatch = filePath === p.filePath;
+              return (
+                <button
+                  key={p.filePath}
+                  type="button"
+                  onClick={() => handleSelectPreset(p)}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition-all cursor-pointer flex items-center gap-1.5 ${
+                    isMatch
+                      ? 'bg-pink-100 dark:bg-pink-950/80 text-pink-800 dark:text-pink-200 border-pink-300 dark:border-pink-800 shadow-xs'
+                      : 'bg-white dark:bg-stone-800 text-stone-700 dark:text-stone-300 border-stone-200 dark:border-stone-700 hover:border-pink-300 hover:text-pink-600'
+                  }`}
+                >
+                  <FileAudio className="w-3 h-3 text-pink-500" />
+                  <span className="font-mono text-[11px]">{p.filePath}</span>
+                  <span className="text-[10px] text-stone-400">({p.title})</span>
+                  {isMatch && <Check className="w-3 h-3 text-pink-600 dark:text-pink-400" />}
+                </button>
+              );
+            })}
           </div>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          {/* File Upload Zone */}
-          {uploadMethod === 'file' ? (
-            <div className="space-y-3">
-              <div
-                onClick={() => audioInputRef.current?.click()}
-                className={`border-2 border-dashed rounded-2xl p-5 text-center transition-all cursor-pointer flex flex-col items-center justify-center gap-2 ${
-                  audioFile
-                    ? 'border-emerald-300 bg-emerald-50/40 dark:border-emerald-800 dark:bg-emerald-950/20'
-                    : 'border-pink-300 dark:border-stone-600 hover:border-pink-500 bg-pink-50/20 dark:bg-stone-900/40'
-                }`}
-              >
-                <input
-                  ref={audioInputRef}
-                  type="file"
-                  accept="audio/mp3,audio/wav,audio/m4a,audio/ogg,audio/mpeg,audio/*"
-                  onChange={handleAudioFileChange}
-                  className="hidden"
-                />
-
-                {audioFile ? (
-                  <div className="flex items-center gap-3 text-left w-full max-w-md p-2 rounded-xl bg-white dark:bg-stone-800 shadow-xs">
-                    <div className="w-10 h-10 rounded-lg bg-emerald-100 dark:bg-emerald-950/80 text-emerald-600 dark:text-emerald-300 flex items-center justify-center shrink-0">
-                      <FileAudio className="w-5 h-5" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="font-semibold text-xs text-stone-800 dark:text-stone-100 truncate">
-                        {audioFile.name}
-                      </p>
-                      <p className="text-[10px] text-stone-400 font-sans">
-                        Dung lượng: {audioFileSizeText} • Thời lượng: {durationInput}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleRemoveSelectedAudio();
-                      }}
-                      className="p-1 rounded-md text-stone-400 hover:text-rose-500 cursor-pointer"
-                      title="Hủy chọn file này"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-                ) : (
-                  <>
-                    <div className="w-12 h-12 rounded-full bg-pink-100 dark:bg-stone-800 text-pink-500 flex items-center justify-center">
-                      <UploadCloud className="w-6 h-6" />
-                    </div>
-                    <div>
-                      <p className="text-xs sm:text-sm font-semibold text-stone-800 dark:text-stone-100">
-                        Nhấn để chọn file nhạc từ máy tính của bạn
-                      </p>
-                      <p className="text-[11px] text-stone-400 mt-0.5">
-                        Hỗ trợ định dạng MP3, WAV, M4A, OGG. Hệ thống sẽ tự động đo thời lượng bài hát.
-                      </p>
-                    </div>
-                  </>
-                )}
-              </div>
-            </div>
-          ) : (
-            <div className="space-y-1">
-              <label className="text-[11px] font-semibold text-stone-800 dark:text-stone-200 flex items-center gap-1">
-                <LinkIcon className="w-3.5 h-3.5 text-pink-500" />
-                <span>Đường dẫn tệp âm thanh trực tiếp (Direct Audio URL):</span>
-              </label>
-              <input
-                type="url"
-                value={audioUrlInput}
-                onChange={(e) => setAudioUrlInput(e.target.value)}
-                placeholder="VD: https://domain.com/audio.mp3 hoặc link trực tiếp"
-                className="w-full px-3.5 py-2.5 rounded-xl bg-stone-50 dark:bg-stone-900 border border-stone-300 dark:border-stone-600 text-stone-900 dark:text-stone-100 text-xs sm:text-sm font-mono focus:ring-2 focus:ring-pink-400 focus:outline-hidden"
-              />
-            </div>
-          )}
-
-          {/* Cover Art Upload (Optional) */}
-          <div className="p-3.5 rounded-xl bg-stone-50/70 dark:bg-stone-900/50 border border-stone-200 dark:border-stone-700 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-xl overflow-hidden bg-stone-200 dark:bg-stone-700 flex items-center justify-center shrink-0 border border-stone-300 dark:border-stone-600">
-                {coverPreviewUrl ? (
-                  <img
-                    src={coverPreviewUrl}
-                    alt="Cover preview"
-                    className="w-full h-full object-cover"
-                  />
-                ) : (
-                  <ImageIcon className="w-5 h-5 text-stone-400" />
-                )}
-              </div>
-              <div>
-                <p className="text-xs font-semibold text-stone-800 dark:text-stone-200">
-                  Ảnh bìa bài hát (Tùy chọn)
-                </p>
-                <p className="text-[10px] text-stone-400">
-                  Hiển thị hình minh họa đĩa nhạc khi phát bài hát này
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <input
-                ref={coverInputRef}
-                type="file"
-                accept="image/*"
-                onChange={handleCoverFileChange}
-                className="hidden"
-              />
-              <button
-                type="button"
-                onClick={() => coverInputRef.current?.click()}
-                className="px-3 py-1.5 rounded-lg border border-stone-300 dark:border-stone-600 bg-white dark:bg-stone-800 text-xs font-medium text-stone-700 dark:text-stone-200 hover:bg-stone-50 cursor-pointer transition-colors"
-              >
-                {coverPreviewUrl ? 'Đổi ảnh bìa' : 'Tải ảnh bìa lên'}
-              </button>
-              {coverPreviewUrl && (
-                <button
-                  type="button"
-                  onClick={handleRemoveSelectedCover}
-                  className="p-1.5 text-stone-400 hover:text-rose-500 cursor-pointer"
-                  title="Gỡ ảnh bìa"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              )}
-            </div>
+          {/* Audio File Path Input */}
+          <div className="space-y-1">
+            <label className="text-[11px] font-semibold text-stone-800 dark:text-stone-200 flex items-center gap-1">
+              <FileMusic className="w-3.5 h-3.5 text-pink-500" />
+              <span>Đường dẫn file bài hát <span className="text-rose-500">*</span></span>
+            </label>
+            <input
+              type="text"
+              required
+              value={filePath}
+              onChange={(e) => setFilePath(e.target.value)}
+              placeholder="VD: music/ten-bai-hat.mp3 hoặc link âm thanh trực tiếp"
+              className="w-full px-3.5 py-2.5 rounded-xl bg-stone-50 dark:bg-stone-900 border border-stone-300 dark:border-stone-600 text-stone-900 dark:text-stone-100 text-xs sm:text-sm font-mono focus:ring-2 focus:ring-pink-400 focus:outline-hidden"
+            />
+            <p className="text-[10px] text-stone-500 dark:text-stone-400 flex items-center gap-1">
+              <Info className="w-3 h-3 text-stone-400" />
+              <span>Nhập đường dẫn tương đối từ thư mục <code className="font-mono">public/</code> (không cần dấu <code className="font-mono">/</code> ở đầu), tự động ghép với <code className="font-mono">BASE_URL</code> tương thích GitHub Pages.</span>
+            </p>
           </div>
 
           {/* Title and Artist Fields */}
@@ -632,9 +455,38 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
                 type="text"
                 value={artist}
                 onChange={(e) => setArtist(e.target.value)}
-                placeholder="VD: Mellifluous Chill"
+                placeholder="VD: Mellifluous Piano"
                 className="w-full px-3.5 py-2.5 rounded-xl bg-stone-50 dark:bg-stone-900 border border-stone-300 dark:border-stone-600 text-stone-900 dark:text-stone-100 text-xs sm:text-sm focus:ring-2 focus:ring-pink-400 focus:outline-hidden"
               />
+            </div>
+          </div>
+
+          {/* Cover Art URL (Optional) */}
+          <div className="space-y-1">
+            <label className="text-[11px] font-semibold text-stone-800 dark:text-stone-200 flex items-center gap-1">
+              <ImageIcon className="w-3.5 h-3.5 text-pink-500" />
+              <span>Đường dẫn ảnh bìa bài hát (Tùy chọn)</span>
+            </label>
+            <div className="flex gap-2 items-center">
+              <input
+                type="text"
+                value={coverUrl}
+                onChange={(e) => setCoverUrl(e.target.value)}
+                placeholder="VD: music/cover.jpg hoặc URL ảnh trực tiếp"
+                className="flex-1 px-3.5 py-2.5 rounded-xl bg-stone-50 dark:bg-stone-900 border border-stone-300 dark:border-stone-600 text-stone-900 dark:text-stone-100 text-xs sm:text-sm font-mono focus:ring-2 focus:ring-pink-400 focus:outline-hidden"
+              />
+              {coverUrl && (
+                <div className="w-10 h-10 rounded-xl overflow-hidden bg-stone-200 dark:bg-stone-700 shrink-0 border border-stone-300 dark:border-stone-600">
+                  <img
+                    src={resolveAudioUrl(coverUrl)}
+                    alt="Cover preview"
+                    className="w-full h-full object-cover"
+                    onError={(e) => {
+                      (e.target as HTMLElement).style.display = 'none';
+                    }}
+                  />
+                </div>
+              )}
             </div>
           </div>
 
@@ -667,45 +519,15 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
             </div>
           </div>
 
-          {/* Upload Progress Bar (when uploading) */}
-          {isUploading && (
-            <div className="p-3.5 rounded-xl bg-pink-50 dark:bg-stone-900 border border-pink-200 dark:border-stone-700 space-y-2 animate-in fade-in">
-              <div className="flex items-center justify-between text-xs">
-                <span className="font-semibold text-pink-700 dark:text-pink-300 flex items-center gap-1.5">
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  <span>{uploadStage}</span>
-                </span>
-                <span className="font-mono font-bold text-pink-600 dark:text-pink-400">
-                  {uploadProgress}%
-                </span>
-              </div>
-              <div className="w-full h-2 bg-pink-100 dark:bg-stone-700 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-gradient-to-r from-pink-500 to-rose-500 transition-all duration-300 rounded-full"
-                  style={{ width: `${uploadProgress}%` }}
-                />
-              </div>
-            </div>
-          )}
-
           {/* Submit Button */}
           <div className="flex justify-end pt-2">
             <button
               type="submit"
-              disabled={isUploading || !title.trim() || (uploadMethod === 'file' && !audioFile) || (uploadMethod === 'url' && !audioUrlInput.trim())}
+              disabled={isSaving || !title.trim() || !filePath.trim()}
               className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-pink-500 to-rose-500 hover:from-pink-600 hover:to-rose-600 text-white text-xs sm:text-sm font-semibold shadow-xs flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50"
             >
-              {isUploading ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  <span>Đang tải lên Firebase Storage...</span>
-                </>
-              ) : (
-                <>
-                  <UploadCloud className="w-4 h-4" />
-                  <span>Tải lên Firebase Storage & Lưu bài hát</span>
-                </>
-              )}
+              <Save className="w-4 h-4" />
+              <span>{isSaving ? 'Đang lưu vào Firestore...' : 'Lưu bài hát vào danh sách phát'}</span>
             </button>
           </div>
         </form>
@@ -735,42 +557,79 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
                   className="p-4 rounded-xl border border-pink-300 dark:border-pink-800 bg-pink-50/40 dark:bg-stone-900 space-y-3"
                 >
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    <input
-                      type="text"
-                      value={editTitle}
-                      onChange={(e) => setEditTitle(e.target.value)}
-                      placeholder="Tên bài hát"
-                      className="px-3 py-1.5 rounded-lg border border-stone-300 dark:border-stone-600 bg-white dark:bg-stone-800 text-xs text-stone-900 dark:text-stone-100"
-                    />
-                    <input
-                      type="text"
-                      value={editArtist}
-                      onChange={(e) => setEditArtist(e.target.value)}
-                      placeholder="Nghệ sĩ"
-                      className="px-3 py-1.5 rounded-lg border border-stone-300 dark:border-stone-600 bg-white dark:bg-stone-800 text-xs text-stone-900 dark:text-stone-100"
-                    />
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-semibold text-stone-700 dark:text-stone-300">Tên bài hát</label>
+                      <input
+                        type="text"
+                        value={editTitle}
+                        onChange={(e) => setEditTitle(e.target.value)}
+                        placeholder="Tên bài hát"
+                        className="w-full px-3 py-1.5 rounded-lg border border-stone-300 dark:border-stone-600 bg-white dark:bg-stone-800 text-xs text-stone-900 dark:text-stone-100"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-semibold text-stone-700 dark:text-stone-300">Nghệ sĩ</label>
+                      <input
+                        type="text"
+                        value={editArtist}
+                        onChange={(e) => setEditArtist(e.target.value)}
+                        placeholder="Nghệ sĩ"
+                        className="w-full px-3 py-1.5 rounded-lg border border-stone-300 dark:border-stone-600 bg-white dark:bg-stone-800 text-xs text-stone-900 dark:text-stone-100"
+                      />
+                    </div>
                   </div>
+
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    <input
-                      type="text"
-                      value={editMood}
-                      onChange={(e) => setEditMood(e.target.value)}
-                      placeholder="Tâm trạng / Thể loại"
-                      className="px-3 py-1.5 rounded-lg border border-stone-300 dark:border-stone-600 bg-white dark:bg-stone-800 text-xs text-stone-900 dark:text-stone-100"
-                    />
-                    <input
-                      type="text"
-                      value={editDuration}
-                      onChange={(e) => setEditDuration(e.target.value)}
-                      placeholder="Thời lượng (VD: 03:45)"
-                      className="px-3 py-1.5 rounded-lg border border-stone-300 dark:border-stone-600 bg-white dark:bg-stone-800 text-xs font-mono text-stone-900 dark:text-stone-100"
-                    />
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-semibold text-stone-700 dark:text-stone-300">Đường dẫn file tĩnh hoặc URL</label>
+                      <input
+                        type="text"
+                        value={editFilePath}
+                        onChange={(e) => setEditFilePath(e.target.value)}
+                        placeholder="music/ten-bai-hat.mp3"
+                        className="w-full px-3 py-1.5 rounded-lg border border-stone-300 dark:border-stone-600 bg-white dark:bg-stone-800 text-xs font-mono text-stone-900 dark:text-stone-100"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-semibold text-stone-700 dark:text-stone-300">Đường dẫn ảnh bìa</label>
+                      <input
+                        type="text"
+                        value={editCoverUrl}
+                        onChange={(e) => setEditCoverUrl(e.target.value)}
+                        placeholder="music/cover.jpg hoặc URL ảnh"
+                        className="w-full px-3 py-1.5 rounded-lg border border-stone-300 dark:border-stone-600 bg-white dark:bg-stone-800 text-xs font-mono text-stone-900 dark:text-stone-100"
+                      />
+                    </div>
                   </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-semibold text-stone-700 dark:text-stone-300">Tâm trạng / Thể loại</label>
+                      <input
+                        type="text"
+                        value={editMood}
+                        onChange={(e) => setEditMood(e.target.value)}
+                        placeholder="Tâm trạng / Thể loại"
+                        className="w-full px-3 py-1.5 rounded-lg border border-stone-300 dark:border-stone-600 bg-white dark:bg-stone-800 text-xs text-stone-900 dark:text-stone-100"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-semibold text-stone-700 dark:text-stone-300">Thời lượng (mm:ss)</label>
+                      <input
+                        type="text"
+                        value={editDuration}
+                        onChange={(e) => setEditDuration(e.target.value)}
+                        placeholder="Thời lượng (VD: 03:45)"
+                        className="w-full px-3 py-1.5 rounded-lg border border-stone-300 dark:border-stone-600 bg-white dark:bg-stone-800 text-xs font-mono text-stone-900 dark:text-stone-100"
+                      />
+                    </div>
+                  </div>
+
                   <div className="flex justify-end gap-2 pt-1">
                     <button
                       type="button"
                       onClick={() => setEditingTrackId(null)}
-                      className="px-3 py-1 rounded-lg border border-stone-300 text-stone-600 dark:text-stone-300 text-xs cursor-pointer"
+                      className="px-3 py-1 rounded-lg border border-stone-300 dark:border-stone-600 text-stone-600 dark:text-stone-300 text-xs cursor-pointer"
                     >
                       Hủy
                     </button>
@@ -820,7 +679,7 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
                   <div className="w-8 h-8 rounded-lg overflow-hidden bg-stone-200 dark:bg-stone-700 shrink-0 flex items-center justify-center border border-stone-300 dark:border-stone-600">
                     {t.coverUrl ? (
                       <img
-                        src={t.coverUrl}
+                        src={resolveAudioUrl(t.coverUrl)}
                         alt={t.title}
                         className="w-full h-full object-cover"
                         referrerPolicy="no-referrer"
@@ -835,19 +694,15 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
                       <p className="font-semibold text-xs text-stone-900 dark:text-stone-100 truncate">
                         {t.title}
                       </p>
-                      {t.storagePath ? (
-                        <span className="px-1.5 py-0.2 rounded-sm bg-pink-100 dark:bg-pink-950 text-pink-700 dark:text-pink-300 text-[9px] font-mono flex items-center gap-1">
-                          <Cloud className="w-2.5 h-2.5" />
-                          <span>Firebase</span>
-                        </span>
-                      ) : (
-                        <span className="px-1.5 py-0.2 rounded-sm bg-stone-200 dark:bg-stone-800 text-stone-600 dark:text-stone-300 text-[9px] font-mono">
-                          Direct
-                        </span>
-                      )}
+                      <span className="px-1.5 py-0.2 rounded-sm bg-stone-200 dark:bg-stone-800 text-stone-600 dark:text-stone-300 text-[9px] font-mono">
+                        {t.audioUrl.startsWith('http') ? 'URL' : 'Repo file'}
+                      </span>
                     </div>
                     <p className="text-[11px] text-stone-500 dark:text-stone-400 truncate">
                       {t.artist} • {t.mood || 'Thư giãn'}
+                    </p>
+                    <p className="text-[10px] text-stone-400 font-mono truncate">
+                      {t.audioUrl}
                     </p>
                   </div>
                 </div>
@@ -870,7 +725,7 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
                     type="button"
                     onClick={() => handleRemoveTrack(t.id, t.title)}
                     className="p-1.5 rounded-lg text-stone-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/60 cursor-pointer"
-                    title="Xóa bài hát và file trên Firebase Storage"
+                    title="Xóa bài hát khỏi danh sách phát"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>

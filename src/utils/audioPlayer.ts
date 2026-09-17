@@ -1,19 +1,20 @@
 // Unified HTML5 Background Music Engine for Mellifluous
-// Plays audio files stored in Firebase Storage and direct streamable audio files
+// Plays static audio files in public/music/ and direct streamable audio files
+// Compatible with GitHub Pages base path via import.meta.env.BASE_URL
 // Provides seamless playback, play/pause, seek, volume, auto-next, and real-time Firestore sync.
 
 import { db, doc, setDoc, deleteDoc, onSnapshot, collection } from '../lib/firebase';
-import { deleteStorageFile, formatSecondsToTime } from './audioStorage';
+import { formatSecondsToTime, resolveAudioUrl, parseDurationToSeconds } from './audioStorage';
 
-export { formatSecondsToTime };
+export { formatSecondsToTime, resolveAudioUrl, parseDurationToSeconds };
 
 export interface AudioTrack {
   id: string;
   title: string;
   artist: string;
-  audioUrl: string; // Firebase Storage public URL or direct audio stream URL
-  storagePath?: string; // Firebase Storage reference path (e.g. music_tracks/...)
-  coverUrl?: string; // Optional cover art image URL
+  audioUrl: string; // File path (e.g. music/ten-bai-hat.mp3) or direct audio stream URL
+  storagePath?: string;
+  coverUrl?: string; // Optional cover art image URL or path
   coverStoragePath?: string;
   duration?: string; // e.g. "03:15"
   durationSeconds?: number;
@@ -41,25 +42,13 @@ export interface AudioPlaybackState {
   error?: string | null;
 }
 
-export function parseDurationToSeconds(durationStr?: string): number {
-  if (!durationStr) return 210;
-  const parts = durationStr.split(':').map((p) => parseInt(p, 10));
-  if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
-    return parts[0] * 60 + parts[1];
-  }
-  if (parts.length === 3 && !isNaN(parts[0]) && !isNaN(parts[1]) && !isNaN(parts[2])) {
-    return parts[0] * 3600 + parts[1] * 60 + parts[2];
-  }
-  return 210;
-}
-
-// Gentle, calming ambient tracks for reader relaxation
+// Gentle, calming ambient tracks in public/music/ for reader relaxation
 export const DEFAULT_TRACK_LIST: AudioTrack[] = [
   {
     id: 'default_track_1',
     title: 'Giai Điệu Hạ Êm Đềm',
     artist: 'Mellifluous Piano',
-    audioUrl: 'https://actions.google.com/sounds/v1/ambiences/outdoor_summer_ambient.ogg',
+    audioUrl: 'music/giai-dieu-ha.mp3',
     duration: '03:15',
     durationSeconds: 195,
     mood: 'Gió hạ thanh bình',
@@ -69,7 +58,7 @@ export const DEFAULT_TRACK_LIST: AudioTrack[] = [
     id: 'default_track_2',
     title: 'Ký Ức Mưa Đầu Hạ',
     artist: 'Mellifluous Serenity',
-    audioUrl: 'https://actions.google.com/sounds/v1/weather/rain_heavy.ogg',
+    audioUrl: 'music/ky-uc-mua.mp3',
     duration: '02:40',
     durationSeconds: 160,
     mood: 'Mưa rơi êm dịu',
@@ -79,7 +68,7 @@ export const DEFAULT_TRACK_LIST: AudioTrack[] = [
     id: 'default_track_3',
     title: 'Chuông Gió Hoa Anh Đào',
     artist: 'Mellifluous Wind',
-    audioUrl: 'https://actions.google.com/sounds/v1/foley/wind_chimes_breeze.ogg',
+    audioUrl: 'music/chuong-gio.mp3',
     duration: '02:18',
     durationSeconds: 138,
     mood: 'Thanh thản sâu lắng',
@@ -89,7 +78,7 @@ export const DEFAULT_TRACK_LIST: AudioTrack[] = [
     id: 'default_track_4',
     title: 'Bình Minh Trên Đồi Trà',
     artist: 'Mellifluous Nature',
-    audioUrl: 'https://actions.google.com/sounds/v1/ambiences/meadow_morning.ogg',
+    audioUrl: 'music/binh-minh.mp3',
     duration: '03:05',
     durationSeconds: 185,
     mood: 'Dịu dàng sớm mai',
@@ -427,7 +416,7 @@ export class BackgroundMusicEngine {
     const track = this.getCurrentTrack();
     if (!track || !track.audioUrl) return;
 
-    this.audio.src = track.audioUrl;
+    this.audio.src = resolveAudioUrl(track.audioUrl);
     this.audio.volume = this.volume;
     this.duration = track.durationSeconds || parseDurationToSeconds(track.duration);
     this.audio.load();
@@ -584,21 +573,13 @@ export class BackgroundMusicEngine {
   }
 
   /**
-   * Author/Admin: Remove a track from playlist and delete its file from Firebase Storage
+   * Author/Admin: Remove a track from playlist
    */
   public async removeTrack(trackId: string): Promise<boolean> {
     const trackToRemove = this.tracks.find((t) => t.id === trackId);
     if (!trackToRemove) return false;
 
     const wasCurrent = this.getCurrentTrack().id === trackId;
-
-    // Clean up Firebase Storage files
-    if (trackToRemove.storagePath) {
-      deleteStorageFile(trackToRemove.storagePath).catch(() => {});
-    }
-    if (trackToRemove.coverStoragePath) {
-      deleteStorageFile(trackToRemove.coverStoragePath).catch(() => {});
-    }
 
     // Update in-memory tracks
     this.tracks = this.tracks.filter((t) => t.id !== trackId);

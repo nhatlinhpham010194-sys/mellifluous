@@ -1,10 +1,30 @@
-import {
-  storage,
-  storageRef,
-  uploadBytesResumable,
-  getDownloadURL,
-  deleteObject,
-} from '../lib/firebase';
+/**
+ * Audio helpers and URL resolver for Mellifluous
+ * Supports static repo assets in public/music/ compatible with GitHub Pages base path.
+ */
+
+/**
+ * Resolve audio file path or URL using import.meta.env.BASE_URL.
+ * Strips any leading "/" from file path to avoid hard-coding leading slash,
+ * ensuring full compatibility with GitHub Pages (e.g. /mellifluous/music/...).
+ */
+export function resolveAudioUrl(pathOrUrl?: string): string {
+  if (!pathOrUrl) return '';
+  const trimmed = pathOrUrl.trim();
+  if (
+    trimmed.startsWith('http://') ||
+    trimmed.startsWith('https://') ||
+    trimmed.startsWith('data:') ||
+    trimmed.startsWith('blob:')
+  ) {
+    return trimmed;
+  }
+  // Strip any leading slash to avoid hard-coding "/"
+  const cleanPath = trimmed.replace(/^\/+/, '');
+  const baseUrl = import.meta.env.BASE_URL || '/';
+  const prefix = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
+  return `${prefix}${cleanPath}`;
+}
 
 /**
  * Format duration seconds into mm:ss
@@ -28,165 +48,16 @@ export function formatBytes(bytes: number): string {
 }
 
 /**
- * Read the duration of an audio file in the browser without uploading first
+ * Parse mm:ss or hh:mm:ss string into seconds
  */
-export function detectAudioDuration(file: File): Promise<{ durationFormatted: string; durationSeconds: number }> {
-  return new Promise((resolve) => {
-    try {
-      const audio = new Audio();
-      const objectUrl = URL.createObjectURL(file);
-      audio.preload = 'metadata';
-
-      const cleanup = () => {
-        URL.revokeObjectURL(objectUrl);
-        audio.removeEventListener('loadedmetadata', handleLoaded);
-        audio.removeEventListener('error', handleError);
-      };
-
-      const handleLoaded = () => {
-        const sec = audio.duration;
-        cleanup();
-        if (!isNaN(sec) && sec > 0) {
-          resolve({
-            durationFormatted: formatSecondsToTime(sec),
-            durationSeconds: Math.round(sec),
-          });
-        } else {
-          resolve({ durationFormatted: '03:30', durationSeconds: 210 });
-        }
-      };
-
-      const handleError = () => {
-        cleanup();
-        resolve({ durationFormatted: '03:30', durationSeconds: 210 });
-      };
-
-      audio.addEventListener('loadedmetadata', handleLoaded);
-      audio.addEventListener('error', handleError);
-      audio.src = objectUrl;
-
-      // Timeout fallback in case metadata doesn't trigger
-      setTimeout(() => {
-        cleanup();
-        resolve({ durationFormatted: '03:30', durationSeconds: 210 });
-      }, 3500);
-    } catch {
-      resolve({ durationFormatted: '03:30', durationSeconds: 210 });
-    }
-  });
-}
-
-/**
- * Upload an audio file (mp3, wav, m4a, ogg) to Firebase Storage
- */
-export async function uploadAudioFileToStorage(
-  file: File,
-  onProgress?: (percent: number) => void
-): Promise<{ downloadUrl: string; storagePath: string; fileSize: number }> {
-  const sanitizedName = file.name
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-zA-Z0-9._-]/g, '_')
-    .toLowerCase();
-
-  const timestamp = Date.now();
-  const storagePath = `music_tracks/${timestamp}_${sanitizedName}`;
-  const fileRef = storageRef(storage, storagePath);
-
-  const contentType = file.type || (file.name.endsWith('.wav') ? 'audio/wav' : 'audio/mpeg');
-  const uploadTask = uploadBytesResumable(fileRef, file, {
-    contentType,
-    customMetadata: {
-      originalName: file.name,
-      uploadedAt: new Date().toISOString(),
-    },
-  });
-
-  return new Promise((resolve, reject) => {
-    uploadTask.on(
-      'state_changed',
-      (snapshot) => {
-        if (onProgress && snapshot.totalBytes > 0) {
-          const progress = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
-          onProgress(progress);
-        }
-      },
-      (error) => {
-        console.error('Firebase Storage upload error:', error);
-        reject(error);
-      },
-      async () => {
-        try {
-          const downloadUrl = await getDownloadURL(uploadTask.snapshot.ref);
-          resolve({
-            downloadUrl,
-            storagePath,
-            fileSize: file.size,
-          });
-        } catch (err) {
-          reject(err);
-        }
-      }
-    );
-  });
-}
-
-/**
- * Upload an optional cover art image to Firebase Storage
- */
-export async function uploadCoverImageToStorage(
-  file: File,
-  onProgress?: (percent: number) => void
-): Promise<{ downloadUrl: string; storagePath: string }> {
-  const sanitizedName = file.name
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-zA-Z0-9._-]/g, '_')
-    .toLowerCase();
-
-  const timestamp = Date.now();
-  const storagePath = `music_covers/${timestamp}_${sanitizedName}`;
-  const fileRef = storageRef(storage, storagePath);
-
-  const uploadTask = uploadBytesResumable(fileRef, file, {
-    contentType: file.type || 'image/jpeg',
-  });
-
-  return new Promise((resolve, reject) => {
-    uploadTask.on(
-      'state_changed',
-      (snapshot) => {
-        if (onProgress && snapshot.totalBytes > 0) {
-          const progress = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
-          onProgress(progress);
-        }
-      },
-      (error) => {
-        reject(error);
-      },
-      async () => {
-        try {
-          const downloadUrl = await getDownloadURL(uploadTask.snapshot.ref);
-          resolve({ downloadUrl, storagePath });
-        } catch (err) {
-          reject(err);
-        }
-      }
-    );
-  });
-}
-
-/**
- * Delete a file from Firebase Storage
- */
-export async function deleteStorageFile(storagePath?: string): Promise<boolean> {
-  if (!storagePath) return false;
-  try {
-    const fileRef = storageRef(storage, storagePath);
-    await deleteObject(fileRef);
-    return true;
-  } catch (err) {
-    console.warn('Could not delete file from Firebase Storage (may already be removed):', err);
-    return false;
+export function parseDurationToSeconds(durationStr?: string): number {
+  if (!durationStr) return 210;
+  const parts = durationStr.split(':').map((p) => parseInt(p, 10));
+  if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+    return parts[0] * 60 + parts[1];
   }
+  if (parts.length === 3 && !isNaN(parts[0]) && !isNaN(parts[1]) && !isNaN(parts[2])) {
+    return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  }
+  return 210;
 }

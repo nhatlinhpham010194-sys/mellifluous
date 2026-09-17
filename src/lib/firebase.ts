@@ -39,13 +39,10 @@ import {
 import {
   getStorage,
   ref as storageRef,
-  uploadBytes,
-  uploadBytesResumable,
   getDownloadURL,
   deleteObject,
   type FirebaseStorage,
   type StorageReference,
-  type UploadTask,
 } from 'firebase/storage';
 import firebaseConfig from '../../firebase-applet-config.json';
 
@@ -92,13 +89,10 @@ export const storage: FirebaseStorage = (() => {
 
 export {
   storageRef,
-  uploadBytes,
-  uploadBytesResumable,
   getDownloadURL,
   deleteObject,
   type FirebaseStorage,
   type StorageReference,
-  type UploadTask,
   doc,
   setDoc,
   getDoc,

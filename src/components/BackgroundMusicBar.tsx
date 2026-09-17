@@ -3,6 +3,7 @@ import {
   bgmEngine,
   AudioTrack,
   formatSecondsToTime,
+  resolveAudioUrl,
 } from '../utils/audioPlayer';
 import {
   Volume2,
@@ -131,10 +132,10 @@ export const BackgroundMusicBar: React.FC<BackgroundMusicBarProps> = ({ onOpenAu
                     onOpenAuthorStudio();
                   }}
                   className="px-2 py-0.5 rounded-lg bg-pink-100 hover:bg-pink-200 dark:bg-pink-950 dark:hover:bg-pink-900 text-pink-700 dark:text-pink-300 text-[10px] font-semibold flex items-center gap-1 cursor-pointer transition-colors"
-                  title="Thêm hoặc tải nhạc lên Firebase Storage"
+                  title="Quản lý danh sách nhạc nền"
                 >
                   <Plus className="w-2.5 h-2.5" />
-                  <span>Tải nhạc</span>
+                  <span>Quản lý</span>
                 </button>
               )}
               <button
@@ -281,7 +282,7 @@ export const BackgroundMusicBar: React.FC<BackgroundMusicBarProps> = ({ onOpenAu
                     <div className="w-7 h-7 rounded-lg overflow-hidden bg-stone-100 dark:bg-stone-700 shrink-0 flex items-center justify-center">
                       {t.coverUrl ? (
                         <img
-                          src={t.coverUrl}
+                          src={resolveAudioUrl(t.coverUrl)}
                           alt={t.title}
                           className="w-full h-full object-cover"
                           referrerPolicy="no-referrer"

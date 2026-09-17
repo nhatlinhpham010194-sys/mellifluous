@@ -855,7 +855,7 @@ export const OtherSections: React.FC<OtherSectionsProps> = ({ onOpenAuthorStudio
                   onClick={onOpenAuthorStudio}
                   className="px-2.5 py-1 rounded-lg bg-pink-100 dark:bg-pink-950 text-pink-700 dark:text-pink-300 text-xs font-semibold hover:bg-pink-200 transition-colors cursor-pointer"
                 >
-                  Tải nhạc lên Firebase Storage
+                  Quản lý danh sách nhạc
                 </button>
               )}
               {isBgmPlaying && (
@@ -868,7 +868,7 @@ export const OtherSections: React.FC<OtherSectionsProps> = ({ onOpenAuthorStudio
           </div>
 
           <p className="text-xs sm:text-sm text-stone-600 dark:text-stone-300 font-sans leading-relaxed">
-            Tuyển tập những bài hát được Mel tuyển chọn và lưu trữ trên Firebase Storage để phát liên tục trong nền qua trình phát HTML5 duy nhất. Khi bật lên, âm nhạc sẽ đồng hành cùng bạn xuyên suốt khi đọc từng chương truyện và chuyển đổi giữa các trang mà không bị ngắt quãng.
+            Tuyển tập những bài hát được Mel tuyển chọn trong thư mục tĩnh của website để phát liên tục trong nền qua trình phát HTML5 duy nhất. Khi bật lên, âm nhạc sẽ đồng hành cùng bạn xuyên suốt khi đọc từng chương truyện và chuyển đổi giữa các trang mà không bị ngắt quãng.
           </p>
 
           {/* Persistent Background Music Banner & Volume Control */}
