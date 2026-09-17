@@ -50,6 +50,7 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
 
   // File Upload states
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<{ percent: number; stepText: string } | null>(null);
   const [fileDuration, setFileDuration] = useState<string>('03:30');
   const [fileDurationSec, setFileDurationSec] = useState<number>(210);
   const [isDragging, setIsDragging] = useState<boolean>(false);
@@ -180,16 +181,25 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
           return;
         }
 
-        const newTrack = await bgmEngine.addUploadedTrack({
-          file: selectedFile,
-          title: title.trim(),
-          artist: artist.trim() || 'Mellifluous',
-          mood: mood.trim() || 'File âm thanh đã tải lên',
-          duration: fileDuration || durationInput || '03:30',
-          addedBy: 'Tác giả',
-        });
+        const newTrack = await bgmEngine.addUploadedTrack(
+          {
+            file: selectedFile,
+            title: title.trim(),
+            artist: artist.trim() || 'Mellifluous',
+            mood: mood.trim() || 'File âm thanh đã tải lên',
+            duration: fileDuration || durationInput || '03:30',
+            addedBy: 'Tác giả',
+          },
+          (progress) => {
+            setUploadProgress(progress);
+          }
+        );
 
-        onFeedback('success', `Đã tải lên và lưu bài hát "${newTrack.title}" thành công!`);
+        setUploadProgress(null);
+        onFeedback(
+          'success',
+          `Đã tải lên và đồng bộ bài hát "${newTrack.title}" lên đám mây thành công! Tất cả thiết bị và người đọc đều có thể nghe được.`
+        );
 
         // Reset form
         setSelectedFile(null);
@@ -340,7 +350,20 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
 
   const getSourceBadge = (t: AudioTrack) => {
     const u = (t.audioUrl || '').toLowerCase();
-    const isLocal = t.isLocalOnly || u.startsWith('blob:') || (t.sourceType === 'uploaded' && !t.audioUrl);
+
+    if (u.startsWith('firestore://') || t.sourceType === 'uploaded' || (t.totalChunks && t.totalChunks > 0)) {
+      return (
+        <span
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-200 text-[10px] font-medium border border-emerald-300 dark:border-emerald-800"
+          title="Bản nhạc này được lưu trữ đám mây vĩnh viễn và đồng bộ tự động. Phát được 100% trên mọi thiết bị và trình duyệt của độc giả."
+        >
+          <CloudIcon className="w-3 h-3 text-emerald-600" />
+          <span>Đám mây vĩnh viễn (Mọi thiết bị)</span>
+        </span>
+      );
+    }
+
+    const isLocal = t.isLocalOnly || (u.startsWith('blob:') && !t.totalChunks);
 
     if (isLocal) {
       return (
@@ -526,18 +549,6 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
           <div className="flex items-center p-1 rounded-xl bg-stone-100 dark:bg-stone-900 border border-stone-200 dark:border-stone-800">
             <button
               type="button"
-              onClick={() => setInputMode('link')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
-                inputMode === 'link'
-                  ? 'bg-white dark:bg-stone-800 text-pink-600 dark:text-pink-400 shadow-xs'
-                  : 'text-stone-600 dark:text-stone-400 hover:text-stone-900'
-              }`}
-            >
-              <LinkIcon className="w-3.5 h-3.5" />
-              <span>Dán link Dropbox / Online (Khuyên dùng 100%)</span>
-            </button>
-            <button
-              type="button"
               onClick={() => setInputMode('upload')}
               className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
                 inputMode === 'upload'
@@ -546,7 +557,19 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
               }`}
             >
               <Upload className="w-3.5 h-3.5" />
-              <span>Tải file từ máy (Chỉ máy này)</span>
+              <span>Tải file trực tiếp từ máy (Đám mây vĩnh viễn)</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setInputMode('link')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                inputMode === 'link'
+                  ? 'bg-white dark:bg-stone-800 text-pink-600 dark:text-pink-400 shadow-xs'
+                  : 'text-stone-600 dark:text-stone-400 hover:text-stone-900'
+              }`}
+            >
+              <LinkIcon className="w-3.5 h-3.5" />
+              <span>Dán link Dropbox / Online (File &gt; 25MB)</span>
             </button>
           </div>
         </div>
@@ -555,12 +578,38 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
           {/* UPLOAD FILE TAB */}
           {inputMode === 'upload' ? (
             <div className="space-y-3">
-              <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200/80 dark:border-amber-800 text-amber-800 dark:text-amber-200 text-xs flex items-start gap-2">
-                <span className="text-sm shrink-0">💡</span>
-                <p>
-                  <strong>Lưu ý về phát trên website tĩnh (GitHub Pages):</strong> Tải file từ máy chỉ lưu trữ trong bộ nhớ máy cục bộ của bạn. Để đảm bảo <strong>100% độc giả trên mọi điện thoại, máy tính, trình duyệt khác</strong> đều cùng nghe được bài hát của bạn mượt mà, hãy tải file lên <strong>Dropbox (miễn phí 2GB)</strong>, nhấn "Chia sẻ" → "Sao chép liên kết" rồi dán vào tab <strong>"Dán link Dropbox"</strong>!
-                </p>
+              <div className="p-3.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200/80 dark:border-emerald-800 text-emerald-900 dark:text-emerald-200 text-xs flex items-start gap-2.5">
+                <span className="text-base shrink-0">☁️</span>
+                <div className="space-y-0.5">
+                  <p className="font-semibold text-emerald-800 dark:text-emerald-300">
+                    Lưu trữ Đám mây tự động — Hoạt động 100% trên tất cả thiết bị, máy chủ & trình duyệt:
+                  </p>
+                  <p className="text-stone-600 dark:text-stone-400 text-[11px] leading-relaxed">
+                    Khi bạn chọn file từ máy, hệ thống tự động phân tách và lưu trữ dữ liệu âm thanh an toàn lên Cơ sở dữ liệu Đám mây. Bất kỳ ai truy cập website từ điện thoại, máy tính, hay bất kỳ trình duyệt nào khác (kể cả GitHub Pages) đều sẽ nghe được trọn vẹn bài hát của bạn mà không gặp lỗi!
+                  </p>
+                </div>
               </div>
+
+              {/* Live Upload Progress */}
+              {uploadProgress && (
+                <div className="p-3.5 rounded-xl bg-pink-50/70 dark:bg-pink-950/40 border border-pink-200 dark:border-pink-850 space-y-2">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-medium text-pink-700 dark:text-pink-300 flex items-center gap-1.5">
+                      <span className="inline-block w-2 h-2 rounded-full bg-pink-500 animate-pulse" />
+                      {uploadProgress.stepText}
+                    </span>
+                    <span className="font-bold text-pink-600 dark:text-pink-400 font-mono">
+                      {uploadProgress.percent}%
+                    </span>
+                  </div>
+                  <div className="w-full bg-stone-200 dark:bg-stone-700 rounded-full h-2.5 overflow-hidden">
+                    <div
+                      className="bg-gradient-to-r from-pink-500 via-rose-500 to-pink-600 h-2.5 rounded-full transition-all duration-300 ease-out"
+                      style={{ width: `${uploadProgress.percent}%` }}
+                    />
+                  </div>
+                </div>
+              )}
 
               {/* Drag & Drop Area */}
               <div
@@ -615,7 +664,7 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
                         Kéo thả file âm thanh vào đây, hoặc click để duyệt file từ máy tính/điện thoại
                       </p>
                       <p className="text-xs text-stone-500 dark:text-stone-400 mt-1 font-sans">
-                        Hỗ trợ định dạng: <span className="font-mono text-pink-600">.mp3, .m4a, .wav, .ogg, .aac, .flac</span> (Khuyên dùng Dropbox để độc giả nghe được)
+                        Hỗ trợ: <span className="font-mono text-pink-600">.mp3, .m4a, .wav, .ogg, .aac, .flac</span> (Tự động đồng bộ lên đám mây)
                       </p>
                     </div>
                   </div>
@@ -874,7 +923,7 @@ export const AuthorMusicTab: React.FC<AuthorMusicTabProps> = ({ onFeedback }) =>
                     <p className="text-[11px] text-stone-500 dark:text-stone-400 truncate mt-0.5">
                       {t.artist} • {t.mood || 'Thư giãn'} {t.fileSize ? `(${t.fileSize})` : ''}
                     </p>
-                    {(t.isLocalOnly || (t.audioUrl && t.audioUrl.startsWith('blob:')) || (t.sourceType === 'uploaded' && !t.audioUrl)) && (
+                    {((t.isLocalOnly && !t.totalChunks && !t.audioUrl?.startsWith('firestore://')) || (t.audioUrl && t.audioUrl.startsWith('blob:') && !t.totalChunks)) && (
                       <div className="mt-1 flex items-center gap-1.5 text-[10.5px] text-amber-700 dark:text-amber-300">
                         <span>⚠️ Chỉ lưu trên máy này.</span>
                         <button

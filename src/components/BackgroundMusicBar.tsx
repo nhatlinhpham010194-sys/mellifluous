@@ -19,6 +19,7 @@ import {
   Sparkles,
   Plus,
   Radio,
+  Loader2,
 } from 'lucide-react';
 import { useAuth } from '../lib/authContext';
 
@@ -40,6 +41,8 @@ export const BackgroundMusicBar: React.FC<BackgroundMusicBarProps> = ({ onOpenAu
   const [prevVolume, setPrevVolume] = useState(0.4);
   const [isSeeking, setIsSeeking] = useState(false);
   const [seekValue, setSeekValue] = useState(0);
+  const [isLoading, setIsLoading] = useState(false);
+  const [loadingProgress, setLoadingProgress] = useState<string | null>(null);
 
   useEffect(() => {
     const unsubscribe = bgmEngine.subscribe((state) => {
@@ -48,6 +51,8 @@ export const BackgroundMusicBar: React.FC<BackgroundMusicBarProps> = ({ onOpenAu
       setVolume(state.volume);
       setDuration(state.duration || 210);
       setSourceType(state.sourceType);
+      setIsLoading(state.isLoading);
+      setLoadingProgress(state.loadingProgress || null);
       if (state.tracks) {
         setTracks(state.tracks);
       }
@@ -165,6 +170,12 @@ export const BackgroundMusicBar: React.FC<BackgroundMusicBarProps> = ({ onOpenAu
                   {sourceType !== 'synth' && (
                     <span className="px-1.5 py-0.2 rounded-sm bg-pink-100 dark:bg-pink-950 text-[9px] font-mono uppercase">
                       {sourceType}
+                    </span>
+                  )}
+                  {loadingProgress && (
+                    <span className="inline-flex items-center gap-1 text-[9.5px] text-amber-600 dark:text-amber-400 font-sans font-medium">
+                      <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                      {loadingProgress}
                     </span>
                   )}
                 </p>

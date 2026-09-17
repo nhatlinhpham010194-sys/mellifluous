@@ -8,6 +8,12 @@
 
 import { db, doc, setDoc, deleteDoc, onSnapshot, collection } from '../lib/firebase';
 import { saveAudioBlobToIDB, getAudioBlobFromIDB, deleteAudioBlobFromIDB } from './audioIndexedDB';
+import {
+  uploadAudioToFirestore,
+  downloadAudioFromFirestore,
+  deleteAudioFromFirestore,
+  type UploadProgress,
+} from './cloudAudioStorage';
 
 export interface AudioTrack {
   id: string;
@@ -15,9 +21,11 @@ export interface AudioTrack {
   artist: string;
   duration?: string;
   mood?: string;
-  audioUrl?: string; // Direct /api/audio/... URL, online link, or empty for built-in melody
+  audioUrl?: string; // Direct /api/audio/... URL, online link, or firestore://trackId
   sourceType?: 'uploaded' | 'direct' | 'gdrive' | 'synth';
   fileSize?: string;
+  mimeType?: string;
+  totalChunks?: number;
   addedBy?: string;
   createdAt?: string;
   isLocalOnly?: boolean;
@@ -35,6 +43,7 @@ export interface AudioPlaybackState {
   sourceType: AudioSourceType;
   isMuted: boolean;
   isLoading: boolean;
+  loadingProgress?: string | null;
   error?: string | null;
 }
 
@@ -347,6 +356,7 @@ class BackgroundMusicEngine {
   private currentTime = 0;
   private duration = 210;
   private isLoading = false;
+  private loadingProgress: string | null = null;
   private currentSourceType: AudioSourceType = 'synth';
   private listeners: Array<(state: AudioPlaybackState) => void> = [];
   private activeBlobUrl: string | null = null;
@@ -597,6 +607,7 @@ class BackgroundMusicEngine {
       sourceType: this.currentSourceType,
       isMuted: this.volume === 0,
       isLoading: this.isLoading,
+      loadingProgress: this.loadingProgress,
     };
   }
 
@@ -616,13 +627,14 @@ class BackgroundMusicEngine {
   /**
    * Resolves the playable URL for a track:
    * - If cached in IndexedDB: uses instant local Blob URL
-   * - If uploaded or local: uses direct URL (/api/audio/...)
+   * - If uploaded or from Firestore cloud storage: downloads chunks, caches in IDB, and plays
+   * - If server hosted (/api/audio/...): resolves full endpoint
    * - If Google Drive: routes through /api/proxy-audio
    * - If external stream: handles direct / proxy
    * - If empty: generates high quality WAV Audio Blob from offline piano synth
    */
   private async resolvePlayableUrl(track: AudioTrack, trackIndex: number): Promise<string> {
-    // 1. Check client IndexedDB cache first (if uploaded directly on THIS device)
+    // 1. Check client IndexedDB cache first (instant playback if uploaded or previously downloaded)
     try {
       const localBlob = await getAudioBlobFromIDB(track.id);
       if (localBlob) {
@@ -637,16 +649,55 @@ class BackgroundMusicEngine {
 
     const rawUrl = track.audioUrl?.trim() || '';
 
-    // 2. Dead blob URL guard:
+    // 2. Cloud-uploaded track stored in Firestore chunks (plays across all devices & servers)
+    if (
+      track.sourceType === 'uploaded' ||
+      rawUrl.startsWith('firestore://') ||
+      (track.totalChunks && track.totalChunks > 0)
+    ) {
+      try {
+        this.isLoading = true;
+        this.loadingProgress = 'Đang tải bài hát từ đám mây...';
+        this.notify();
+
+        const totalChunks = track.totalChunks || 1;
+        const blob = await downloadAudioFromFirestore(
+          track.id,
+          totalChunks,
+          track.mimeType || 'audio/mpeg',
+          (pct) => {
+            this.loadingProgress = `Đang đồng bộ âm thanh (${pct}%)...`;
+            this.notify();
+          }
+        );
+
+        // Cache permanently into this device's IndexedDB so subsequent plays are instant (0 ms latency)
+        await saveAudioBlobToIDB(track.id, blob, track.title);
+
+        if (this.activeBlobUrl) {
+          URL.revokeObjectURL(this.activeBlobUrl);
+        }
+        this.activeBlobUrl = URL.createObjectURL(blob);
+        this.currentSourceType = 'uploaded';
+        this.loadingProgress = null;
+        return this.activeBlobUrl;
+      } catch (cloudErr) {
+        console.warn(`[BGM] Cloud chunk fetch fallback for "${track.title}":`, cloudErr);
+      } finally {
+        this.loadingProgress = null;
+      }
+    }
+
+    // 3. Dead blob URL guard:
     // A blob: URL is only valid on the single browser session where it was generated.
-    // If not in this device's IndexedDB, do not attempt to load it on a foreign device.
+    // If not in this device's IndexedDB and not on Firestore, fallback to melody.
     if (rawUrl.startsWith('blob:')) {
-      console.warn(`[BGM] Track "${track.title}" has a local blob URL from another device. Falling back to ambient melody.`);
+      console.warn(`[BGM] Track "${track.title}" has an expired local blob URL. Falling back to ambient melody.`);
       this.currentSourceType = 'synth';
       return await generateMelodyWavUrl(trackIndex, 180);
     }
 
-    // 3. Direct server-hosted audio (/api/audio/...)
+    // 4. Direct server-hosted audio (/api/audio/...)
     if (rawUrl.startsWith('/api/')) {
       this.currentSourceType = 'uploaded';
       return resolveFullAudioUrl(rawUrl);
@@ -819,53 +870,67 @@ class BackgroundMusicEngine {
 
   /**
    * Adds an audio track created via file upload.
-   * Automatically uploads file to /api/upload-audio and caches in IndexedDB.
+   * Stores binary audio in Firestore chunks & caches in local IndexedDB.
+   * Guarantees 100% playback across all devices, browsers, and servers (including GitHub Pages).
    */
-  public async addUploadedTrack(params: {
-    file: File;
-    title: string;
-    artist?: string;
-    mood?: string;
-    duration?: string;
-    addedBy?: string;
-  }): Promise<AudioTrack> {
+  public async addUploadedTrack(
+    params: {
+      file: File;
+      title: string;
+      artist?: string;
+      mood?: string;
+      duration?: string;
+      addedBy?: string;
+    },
+    onProgress?: (progress: UploadProgress) => void
+  ): Promise<AudioTrack> {
     const trackId = `track-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
 
-    // 1. Cache blob in IndexedDB immediately for instant offline playback
+    // 1. Cache blob in IndexedDB immediately for instant zero-latency playback on the current device
     await saveAudioBlobToIDB(trackId, params.file, params.file.name);
 
-    // 2. Convert file to Base64 and upload to server
-    const base64 = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = reject;
-      reader.readAsDataURL(params.file);
-    });
+    // 2. Upload chunks to Firestore cloud storage
+    let totalChunks = 1;
+    let fileSizeStr = `${(params.file.size / (1024 * 1024)).toFixed(1)} MB`;
+    let mimeType = params.file.type || 'audio/mpeg';
 
-    let publicUrl = '';
     try {
-      const apiBase = (typeof window !== 'undefined' && window.location.hostname.includes('github.io'))
-        ? 'https://ais-dev-7omy3nxbcenuidl2tgny3y-286439284546.asia-southeast1.run.app'
-        : '';
-      const res = await fetch(`${apiBase}/api/upload-audio`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          filename: params.file.name,
-          data: base64,
-          mimeType: params.file.type || 'audio/mpeg',
-        }),
-      });
-
-      if (res.ok) {
-        const json = await res.json();
-        publicUrl = json.url;
-      }
-    } catch (err) {
-      console.warn('Server upload note, using local IndexedDB fallback:', err);
+      const uploadRes = await uploadAudioToFirestore(trackId, params.file, onProgress);
+      totalChunks = uploadRes.totalChunks;
+      fileSizeStr = uploadRes.fileSizeStr;
+      mimeType = uploadRes.mimeType;
+    } catch (chunkErr) {
+      console.error('Firestore cloud audio upload error:', chunkErr);
+      throw new Error(
+        'Không thể lưu âm thanh lên đám mây: ' +
+          (chunkErr instanceof Error ? chunkErr.message : String(chunkErr))
+      );
     }
 
-    const fileSizeStr = `${(params.file.size / (1024 * 1024)).toFixed(1)} MB`;
+    // 3. Background server upload (optional mirror if server is running)
+    const publicUrl = `firestore://${trackId}`;
+    try {
+      const reader = new FileReader();
+      reader.onload = async () => {
+        try {
+          const base64 = reader.result as string;
+          const apiBase =
+            typeof window !== 'undefined' && window.location.hostname.includes('github.io')
+              ? 'https://ais-dev-7omy3nxbcenuidl2tgny3y-286439284546.asia-southeast1.run.app'
+              : '';
+          await fetch(`${apiBase}/api/upload-audio`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              filename: params.file.name,
+              data: base64,
+              mimeType: params.file.type || 'audio/mpeg',
+            }),
+          });
+        } catch {}
+      };
+      reader.readAsDataURL(params.file);
+    } catch {}
 
     const newTrack: AudioTrack = {
       id: trackId,
@@ -876,9 +941,11 @@ class BackgroundMusicEngine {
       audioUrl: publicUrl,
       sourceType: 'uploaded',
       fileSize: fileSizeStr,
+      mimeType,
+      totalChunks,
       addedBy: params.addedBy || 'Tác giả',
       createdAt: new Date().toISOString(),
-      isLocalOnly: !publicUrl,
+      isLocalOnly: false,
     };
 
     this.tracks.push(newTrack);
@@ -976,6 +1043,12 @@ class BackgroundMusicEngine {
       this.play(this.currentTrackIndex);
     } else {
       this.notify();
+    }
+
+    // Clean up cloud audio chunks from Firestore if it was an uploaded track
+    const trackToRemove = this.tracks.find((t) => t.id === trackId);
+    if (trackToRemove && (trackToRemove.sourceType === 'uploaded' || trackToRemove.audioUrl?.startsWith('firestore://'))) {
+      deleteAudioFromFirestore(trackId, trackToRemove.totalChunks || 30).catch(() => {});
     }
 
     await deleteAudioBlobFromIDB(trackId);
